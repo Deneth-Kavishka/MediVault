@@ -270,16 +270,6 @@ MediVault/
 - **CORS** - Cross-origin requests
 - **Rate Limiting** - API protection
 
-### Development Tools
-
-- **Nodemon** - Development server
-- **Colors** - Console colors
-- **Morgan** - HTTP logging
-- **Compression** - Response compression
-
-## Contributing
-
-This is a healthcare management system project. Please ensure all code follows medical data handling best practices and compliance requirements.
 
 ## License
 
