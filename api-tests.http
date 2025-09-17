@@ -1,0 +1,571 @@
+### MediVault API Testing with VS Code REST Client
+### Install the "REST Client" extension in VS Code to use this file
+### Click "Send Request" above each request to test
+
+@baseUrl = http://localhost:5000
+@apiUrl = {{baseUrl}}/api
+
+### Variables (Update these after testing)
+@doctorToken = 
+@patientToken = 
+@pharmacistToken = 
+@adminToken = 
+@patientId = 
+@doctorId = 
+@appointmentId = 
+@prescriptionId = 
+@recordId = 
+
+###########################################
+# 1. HEALTH CHECK & SERVER STATUS
+###########################################
+
+### Health Check
+GET {{baseUrl}}/health
+
+### API Information
+GET {{apiUrl}}
+
+###########################################
+# 2. AUTHENTICATION TESTS
+###########################################
+
+### Register Doctor
+POST {{apiUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "firstName": "Dr. John",
+  "lastName": "Smith",
+  "email": "doctor@medivault.com",
+  "password": "Password123!",
+  "confirmPassword": "Password123!",
+  "nic": "198012345678",
+  "phone": "+94771234567",
+  "dateOfBirth": "1980-01-15",
+  "gender": "Male",
+  "address": "123 Medical Street, Colombo 03",
+  "role": "Doctor",
+  "emergencyContact": {
+    "name": "Jane Smith",
+    "relationship": "Spouse",
+    "phone": "+94771234568"
+  }
+}
+
+### Register Patient
+POST {{apiUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "firstName": "Sarah",
+  "lastName": "Johnson",
+  "email": "patient@medivault.com",
+  "password": "Password123!",
+  "confirmPassword": "Password123!",
+  "nic": "199512345679",
+  "phone": "+94777654321",
+  "dateOfBirth": "1995-05-20",
+  "gender": "Female",
+  "address": "456 Patient Avenue, Kandy",
+  "role": "Patient",
+  "emergencyContact": {
+    "name": "Mike Johnson",
+    "relationship": "Father",
+    "phone": "+94777654322"
+  },
+  "bloodType": "A+",
+  "height": 165,
+  "weight": 58
+}
+
+### Register Pharmacist
+POST {{apiUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "firstName": "David",
+  "lastName": "Pharmacy",
+  "email": "pharmacist@medivault.com",
+  "password": "Password123!",
+  "confirmPassword": "Password123!",
+  "nic": "198712345680",
+  "phone": "+94771112233",
+  "dateOfBirth": "1987-03-10",
+  "gender": "Male",
+  "address": "789 Pharmacy Road, Galle",
+  "role": "Pharmacist",
+  "emergencyContact": {
+    "name": "Lisa Pharmacy",
+    "relationship": "Spouse",
+    "phone": "+94771112234"
+  }
+}
+
+### Register Admin
+POST {{apiUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "firstName": "Admin",
+  "lastName": "User",
+  "email": "admin@medivault.com",
+  "password": "Password123!",
+  "confirmPassword": "Password123!",
+  "nic": "197512345681",
+  "phone": "+94705556677",
+  "dateOfBirth": "1975-12-01",
+  "gender": "Male",
+  "address": "101 Admin Plaza, Colombo 01",
+  "role": "Admin",
+  "emergencyContact": {
+    "name": "System Admin",
+    "relationship": "Colleague",
+    "phone": "+94705556678"
+  }
+}
+
+### Login Doctor
+POST {{apiUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "doctor@medivault.com",
+  "password": "Password123!"
+}
+
+### Login Patient
+POST {{apiUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "patient@medivault.com",
+  "password": "Password123!"
+}
+
+### Login Pharmacist
+POST {{apiUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "pharmacist@medivault.com",
+  "password": "Password123!"
+}
+
+### Login Admin
+POST {{apiUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@medivault.com",
+  "password": "Password123!"
+}
+
+### Get Current User (Doctor)
+GET {{apiUrl}}/auth/me
+Authorization: Bearer {{doctorToken}}
+
+### Get Current User (Patient)
+GET {{apiUrl}}/auth/me
+Authorization: Bearer {{patientToken}}
+
+### Update Password
+PUT {{apiUrl}}/auth/updatepassword
+Authorization: Bearer {{doctorToken}}
+Content-Type: application/json
+
+{
+  "currentPassword": "Password123!",
+  "newPassword": "NewPassword123!",
+  "confirmPassword": "NewPassword123!"
+}
+
+### Forgot Password
+POST {{apiUrl}}/auth/forgotpassword
+Content-Type: application/json
+
+{
+  "email": "doctor@medivault.com"
+}
+
+###########################################
+# 3. PATIENT MANAGEMENT TESTS
+###########################################
+
+### Create Patient (by Admin/Doctor)
+POST {{apiUrl}}/patients
+Authorization: Bearer {{doctorToken}}
+Content-Type: application/json
+
+{
+  "firstName": "Emily",
+  "lastName": "Davis",
+  "email": "emily.davis@email.com",
+  "nic": "199812345683",
+  "phone": "+94771234569",
+  "dateOfBirth": "1998-08-15",
+  "gender": "Female",
+  "address": "789 Health Street, Colombo 05",
+  "emergencyContact": {
+    "name": "Robert Davis",
+    "relationship": "Father",
+    "phone": "+94771234570"
+  },
+  "bloodType": "O+",
+  "height": 160,
+  "weight": 55,
+  "allergies": [
+    {
+      "allergen": "Penicillin",
+      "severity": "Severe",
+      "reaction": "Anaphylaxis",
+      "diagnosedDate": "2020-01-15"
+    }
+  ],
+  "chronicConditions": [
+    {
+      "condition": "Asthma",
+      "diagnosedDate": "2015-03-20",
+      "status": "Active"
+    }
+  ]
+}
+
+### Get All Patients
+GET {{apiUrl}}/patients
+Authorization: Bearer {{doctorToken}}
+
+### Get All Patients with Search
+GET {{apiUrl}}/patients?search=Sarah&limit=10
+Authorization: Bearer {{doctorToken}}
+
+### Get Patient by ID
+GET {{apiUrl}}/patients/{{patientId}}
+Authorization: Bearer {{doctorToken}}
+
+### Update Patient
+PUT {{apiUrl}}/patients/{{patientId}}
+Authorization: Bearer {{doctorToken}}
+Content-Type: application/json
+
+{
+  "phone": "+94777654999",
+  "address": "Updated Address, Kandy",
+  "weight": 60
+}
+
+### Update Patient Vitals
+PUT {{apiUrl}}/patients/{{patientId}}/vitals
+Authorization: Bearer {{doctorToken}}
+Content-Type: application/json
+
+{
+  "bloodPressure": "120/80",
+  "heartRate": 72,
+  "temperature": 36.5,
+  "respiratoryRate": 16,
+  "oxygenSaturation": 98,
+  "height": 165,
+  "weight": 59
+}
+
+### Get Patient Medical History
+GET {{apiUrl}}/patients/{{patientId}}/medical-history
+Authorization: Bearer {{doctorToken}}
+
+### Get Patient Statistics
+GET {{apiUrl}}/patients/stats
+Authorization: Bearer {{doctorToken}}
+
+###########################################
+# 4. APPOINTMENT MANAGEMENT TESTS
+###########################################
+
+### Create Appointment
+POST {{apiUrl}}/appointments
+Authorization: Bearer {{doctorToken}}
+Content-Type: application/json
+
+{
+  "patient": "{{patientId}}",
+  "doctor": "{{doctorId}}",
+  "appointmentDate": "2025-09-20",
+  "appointmentTime": "10:00",
+  "appointmentType": "Consultation",
+  "reason": "Regular checkup and medication review",
+  "notes": "Patient reports feeling well overall",
+  "priority": "Medium"
+}
+
+### Get All Appointments
+GET {{apiUrl}}/appointments
+Authorization: Bearer {{doctorToken}}
+
+### Get Appointments by Date
+GET {{apiUrl}}/appointments?date=2025-09-20
+Authorization: Bearer {{doctorToken}}
+
+### Get Appointment by ID
+GET {{apiUrl}}/appointments/{{appointmentId}}
+Authorization: Bearer {{doctorToken}}
+
+### Update Appointment
+PUT {{apiUrl}}/appointments/{{appointmentId}}
+Authorization: Bearer {{doctorToken}}
+Content-Type: application/json
+
+{
+  "status": "In Progress",
+  "notes": "Patient arrived on time, vitals checked"
+}
+
+### Complete Appointment
+PUT {{apiUrl}}/appointments/{{appointmentId}}/complete
+Authorization: Bearer {{doctorToken}}
+Content-Type: application/json
+
+{
+  "clinicalNotes": "Patient shows good progress. Blood pressure within normal range. No concerning symptoms reported.",
+  "diagnosis": "Healthy - routine checkup",
+  "treatment": "Continue current lifestyle and medications",
+  "followUpInstructions": "Return in 6 months for routine checkup. Contact if any concerns arise.",
+  "nextAppointmentDate": "2026-03-20"
+}
+
+### Cancel Appointment
+PUT {{apiUrl}}/appointments/{{appointmentId}}/cancel
+Authorization: Bearer {{doctorToken}}
+Content-Type: application/json
+
+{
+  "reason": "Patient requested rescheduling due to emergency"
+}
+
+### Get Doctor Schedule
+GET {{apiUrl}}/appointments/schedule/{{doctorId}}?date=2025-09-20
+Authorization: Bearer {{doctorToken}}
+
+### Get Appointment Statistics
+GET {{apiUrl}}/appointments/stats
+Authorization: Bearer {{doctorToken}}
+
+###########################################
+# 5. PRESCRIPTION MANAGEMENT TESTS
+###########################################
+
+### Create Prescription
+POST {{apiUrl}}/prescriptions
+Authorization: Bearer {{doctorToken}}
+Content-Type: application/json
+
+{
+  "patient": "{{patientId}}",
+  "medicines": [
+    {
+      "medicine": "medicine_id_placeholder",
+      "dosage": "500mg",
+      "frequency": "Twice daily",
+      "duration": "7 days",
+      "quantity": 14,
+      "instructions": "Take with food to avoid stomach upset"
+    }
+  ],
+  "instructions": "Complete the full course even if feeling better. Take with plenty of water.",
+  "diagnosis": "Upper respiratory tract infection",
+  "notes": "Monitor for allergic reactions. Patient has known penicillin allergy.",
+  "refillsAllowed": 0,
+  "validUntil": "2025-10-17"
+}
+
+### Get All Prescriptions
+GET {{apiUrl}}/prescriptions
+Authorization: Bearer {{doctorToken}}
+
+### Get Prescriptions by Status
+GET {{apiUrl}}/prescriptions?status=Active
+Authorization: Bearer {{pharmacistToken}}
+
+### Get Prescription by ID
+GET {{apiUrl}}/prescriptions/{{prescriptionId}}
+Authorization: Bearer {{doctorToken}}
+
+### Update Prescription
+PUT {{apiUrl}}/prescriptions/{{prescriptionId}}
+Authorization: Bearer {{doctorToken}}
+Content-Type: application/json
+
+{
+  "instructions": "Updated instructions: Take with food and avoid alcohol",
+  "notes": "Updated notes: Patient tolerated medication well in previous prescriptions"
+}
+
+### Verify Prescription (QR Code)
+POST {{apiUrl}}/prescriptions/verify
+Authorization: Bearer {{pharmacistToken}}
+Content-Type: application/json
+
+{
+  "qrData": "{\"prescriptionId\":\"RX00000001\",\"patientId\":\"199512345679\",\"doctorId\":\"198012345678\",\"medicines\":[{\"id\":\"medicine_id\",\"dosage\":\"500mg\",\"quantity\":14}],\"issuedAt\":\"2025-09-17T10:00:00.000Z\",\"validUntil\":\"2025-10-17T10:00:00.000Z\",\"hash\":\"verification_hash\"}"
+}
+
+### Dispense Prescription
+PUT {{apiUrl}}/prescriptions/{{prescriptionId}}/dispense
+Authorization: Bearer {{pharmacistToken}}
+Content-Type: application/json
+
+{
+  "notes": "All medications dispensed successfully. Patient counseled on proper usage and side effects."
+}
+
+### Cancel Prescription
+PUT {{apiUrl}}/prescriptions/{{prescriptionId}}/cancel
+Authorization: Bearer {{doctorToken}}
+Content-Type: application/json
+
+{
+  "reason": "Patient reported adverse reaction to medication"
+}
+
+### Get Prescription Statistics
+GET {{apiUrl}}/prescriptions/stats
+Authorization: Bearer {{doctorToken}}
+
+###########################################
+# 6. MEDICAL RECORDS TESTS
+###########################################
+
+### Create Medical Record
+POST {{apiUrl}}/medical-records
+Authorization: Bearer {{doctorToken}}
+Content-Type: application/json
+
+{
+  "patient": "{{patientId}}",
+  "recordType": "Consultation",
+  "visitDate": "2025-09-17",
+  "chiefComplaint": "Chest discomfort and shortness of breath",
+  "historyOfPresentIllness": "Patient reports chest discomfort for 2 days, particularly during physical activity. No radiation to arms or jaw. Associated with mild shortness of breath.",
+  "pastMedicalHistory": "Hypertension controlled with medication. No previous cardiac events.",
+  "socialHistory": "Non-smoker, occasional alcohol consumption, exercises regularly",
+  "familyHistory": "Father with coronary artery disease at age 65",
+  "reviewOfSystems": {
+    "cardiovascular": "Chest discomfort as described",
+    "respiratory": "Mild shortness of breath",
+    "gastrointestinal": "No nausea or vomiting",
+    "neurological": "No dizziness or syncope"
+  },
+  "physicalExamination": {
+    "general": "Alert and oriented, appears comfortable at rest",
+    "vitals": {
+      "bloodPressure": "130/85",
+      "heartRate": 78,
+      "temperature": 36.8,
+      "respiratoryRate": 18,
+      "oxygenSaturation": 97
+    },
+    "cardiovascular": "Regular rate and rhythm, no murmurs or gallops",
+    "respiratory": "Clear lung fields bilaterally, no wheezes or crackles",
+    "abdomen": "Soft, non-tender, no organomegaly"
+  },
+  "diagnoses": {
+    "primaryDiagnosis": "Atypical chest pain, likely musculoskeletal",
+    "secondaryDiagnoses": ["Hypertension, controlled"]
+  },
+  "treatment": {
+    "medications": ["Ibuprofen 400mg TID PRN", "Continue current BP medications"],
+    "procedures": [],
+    "recommendations": "Rest, avoid strenuous activity for 48 hours, apply heat/cold as needed"
+  },
+  "labResults": [],
+  "imagingResults": [],
+  "followUpPlan": "Return in 1 week if symptoms persist or worsen. Consider stress testing if symptoms recur.",
+  "notes": "Patient educated about warning signs requiring immediate medical attention"
+}
+
+### Get All Medical Records
+GET {{apiUrl}}/medical-records
+Authorization: Bearer {{doctorToken}}
+
+### Get Medical Records by Patient
+GET {{apiUrl}}/medical-records?patient={{patientId}}
+Authorization: Bearer {{doctorToken}}
+
+### Get Medical Record by ID
+GET {{apiUrl}}/medical-records/{{recordId}}
+Authorization: Bearer {{doctorToken}}
+
+### Update Medical Record
+PUT {{apiUrl}}/medical-records/{{recordId}}
+Authorization: Bearer {{doctorToken}}
+Content-Type: application/json
+
+{
+  "followUpPlan": "Updated follow-up plan: Return in 2 weeks for symptom reassessment",
+  "notes": "Patient reports improvement in symptoms since last visit"
+}
+
+### Finalize Medical Record
+PUT {{apiUrl}}/medical-records/{{recordId}}/finalize
+Authorization: Bearer {{doctorToken}}
+
+### Get Patient Medical History via Medical Records
+GET {{apiUrl}}/medical-records/patient/{{patientId}}/history
+Authorization: Bearer {{doctorToken}}
+
+### Get Medical Records Statistics
+GET {{apiUrl}}/medical-records/stats
+Authorization: Bearer {{doctorToken}}
+
+###########################################
+# 7. ERROR TESTING SCENARIOS
+###########################################
+
+### Test Unauthorized Access
+GET {{apiUrl}}/patients
+# No Authorization header
+
+### Test Invalid Token
+GET {{apiUrl}}/patients
+Authorization: Bearer invalid_token_here
+
+### Test Invalid Registration Data
+POST {{apiUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "firstName": "Test",
+  "email": "incomplete@test.com"
+  # Missing required fields
+}
+
+### Test Invalid Login
+POST {{apiUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "wrong@email.com",
+  "password": "wrongpassword"
+}
+
+### Test Role-Based Access (Patient trying to access admin route)
+GET {{apiUrl}}/patients/stats
+Authorization: Bearer {{patientToken}}
+
+###########################################
+# 8. RATE LIMITING TESTS
+###########################################
+
+### Test Rate Limiting - Auth Endpoint (15 requests/15 minutes)
+# Send this request multiple times quickly
+POST {{apiUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "doctor@medivault.com",
+  "password": "Password123!"
+}
+
+### Test Rate Limiting - General Endpoint (100 requests/15 minutes)
+# Send this request multiple times quickly
+GET {{apiUrl}}/patients
+Authorization: Bearer {{doctorToken}}
