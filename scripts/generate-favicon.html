@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Favicon Generator</title>
+  </head>
+  <body>
+    <canvas id="canvas" width="64" height="64"></canvas>
+    <br />
+    <button onclick="downloadPNG()">Download PNG</button>
+    <script>
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+
+      // Background with rounded corners
+      ctx.fillStyle = "#1494B5";
+      roundRect(ctx, 0, 0, 64, 64, 12);
+      ctx.fill();
+
+      // Pill blister pack background
+      ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+      roundRect(ctx, 20, 16, 24, 32, 4);
+      ctx.fill();
+
+      // Top half (colored)
+      ctx.fillStyle = "rgba(14, 165, 201, 0.3)";
+      ctx.beginPath();
+      ctx.moveTo(24, 16);
+      ctx.lineTo(40, 16);
+      ctx.arcTo(44, 16, 44, 20, 4);
+      ctx.lineTo(44, 32);
+      ctx.lineTo(20, 32);
+      ctx.lineTo(20, 20);
+      ctx.arcTo(20, 16, 24, 16, 4);
+      ctx.closePath();
+      ctx.fill();
+
+      // Pills (dots)
+      const pillColor1 = "#0EA5C9";
+      const pillColor2 = "white";
+
+      // Top row (colored)
+      drawCircle(ctx, 26, 22, 2, pillColor1);
+      drawCircle(ctx, 38, 22, 2, pillColor1);
+
+      // Second row (white)
+      drawCircle(ctx, 26, 30, 2, pillColor2);
+      drawCircle(ctx, 38, 30, 2, pillColor2);
+
+      // Third row (white)
+      drawCircle(ctx, 26, 38, 2, pillColor2);
+      drawCircle(ctx, 38, 38, 2, pillColor2);
+
+      // Bottom row (white)
+      drawCircle(ctx, 26, 46, 2, pillColor2);
+      drawCircle(ctx, 38, 46, 2, pillColor2);
+
+      // Center highlight
+      drawCircle(ctx, 32, 22, 1.5, "rgba(255, 255, 255, 0.6)");
+
+      // Border
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+      ctx.lineWidth = 0.5;
+      roundRect(ctx, 2, 2, 60, 60, 10);
+      ctx.stroke();
+
+      function roundRect(ctx, x, y, width, height, radius) {
+        ctx.beginPath();
+        ctx.moveTo(x + radius, y);
+        ctx.lineTo(x + width - radius, y);
+        ctx.arcTo(x + width, y, x + width, y + radius, radius);
+        ctx.lineTo(x + width, y + height - radius);
+        ctx.arcTo(
+          x + width,
+          y + height,
+          x + width - radius,
+          y + height,
+          radius
+        );
+        ctx.lineTo(x + radius, y + height);
+        ctx.arcTo(x, y + height, x, y + height - radius, radius);
+        ctx.lineTo(x, y + radius);
+        ctx.arcTo(x, y, x + radius, y, radius);
+        ctx.closePath();
+      }
+
+      function drawCircle(ctx, x, y, radius, color) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      function downloadPNG() {
+        canvas.toBlob(function (blob) {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "favicon.png";
+          a.click();
+          URL.revokeObjectURL(url);
+        });
+      }
+    </script>
+  </body>
+</html>
