@@ -575,6 +575,176 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============================================================================
+  // ADMIN ROUTES
+  // ============================================================================
+
+  // Get system statistics
+  app.get("/api/admin/stats", isAdmin, async (req, res) => {
+    try {
+      const stats = await storage.getSystemStats();
+      res.json(stats);
+    } catch (error) {
+      console.error("Error fetching system stats:", error);
+      res.status(500).json({ message: "Failed to fetch system statistics" });
+    }
+  });
+
+  // Create new user (admin only)
+  app.post("/api/admin/users", isAdmin, async (req, res) => {
+    try {
+      const {
+        username,
+        password,
+        email,
+        firstName,
+        lastName,
+        role,
+        patientData,
+      } = req.body;
+
+      // Validate required fields
+      if (!username || !password || !role) {
+        return res
+          .status(400)
+          .json({ message: "Username, password, and role are required" });
+      }
+
+      // Hash password
+      const bcrypt = await import("bcrypt");
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      // Create user
+      const user = await storage.upsertUser({
+        username,
+        password: hashedPassword,
+        email,
+        firstName,
+        lastName,
+        role,
+      });
+
+      // If role is patient, create patient record with RFID
+      if (role === "patient" && patientData) {
+        await storage.createPatient({
+          userId: user.id,
+          nic: patientData.nic,
+          rfid: patientData.rfid, // RFID is required for patients
+          dateOfBirth: patientData.dateOfBirth
+            ? new Date(patientData.dateOfBirth)
+            : undefined,
+          gender: patientData.gender,
+          contactInfo: patientData.contactInfo,
+          address: patientData.address,
+          bloodType: patientData.bloodType,
+          allergies: patientData.allergies,
+        });
+      }
+
+      // If role is doctor, create doctor record
+      if (role === "doctor" && req.body.doctorData) {
+        await storage.createDoctor({
+          userId: user.id,
+          specialization: req.body.doctorData.specialization,
+          licenseNumber: req.body.doctorData.licenseNumber,
+          qualifications: req.body.doctorData.qualifications,
+          experience: req.body.doctorData.experience,
+        });
+      }
+
+      // If role is pharmacist, create pharmacist record
+      if (role === "pharmacist" && req.body.pharmacistData) {
+        await storage.createPharmacist({
+          userId: user.id,
+          licenseNumber: req.body.pharmacistData.licenseNumber,
+        });
+      }
+
+      // If role is lab_technician, create lab technician record
+      if (role === "lab_technician" && req.body.labTechData) {
+        await storage.createLabTechnician({
+          userId: user.id,
+          certificationNumber: req.body.labTechData.certificationNumber,
+        });
+      }
+
+      res.status(201).json({ ...user, password: undefined });
+    } catch (error: any) {
+      console.error("Error creating user:", error);
+      res
+        .status(400)
+        .json({ message: error.message || "Failed to create user" });
+    }
+  });
+
+  // Get all users (with optional role filter)
+  app.get("/api/admin/users", isAdmin, async (req, res) => {
+    try {
+      const { role } = req.query;
+      const users = role
+        ? await storage.getUsersByRole(role as string)
+        : await storage.getAllUsers();
+      res.json(users);
+    } catch (error) {
+      console.error("Error fetching users:", error);
+      res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+
+  // Get specific user by ID
+  app.get("/api/admin/users/:id", isAdmin, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.params.id);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      res.json(user);
+    } catch (error) {
+      console.error("Error fetching user:", error);
+      res.status(500).json({ message: "Failed to fetch user" });
+    }
+  });
+
+  // Update user
+  app.patch("/api/admin/users/:id", isAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const updateData = req.body;
+
+      // Prevent updating sensitive fields directly
+      delete updateData.password;
+
+      const user = await storage.updateUser(id, updateData);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      res.json(user);
+    } catch (error) {
+      console.error("Error updating user:", error);
+      res.status(500).json({ message: "Failed to update user" });
+    }
+  });
+
+  // Delete user
+  app.delete("/api/admin/users/:id", isAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // Prevent deleting self
+      if ((req as any).user.id === id) {
+        return res
+          .status(400)
+          .json({ message: "Cannot delete your own account" });
+      }
+
+      await storage.deleteUser(id);
+      res.json({ message: "User deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting user:", error);
+      res.status(500).json({ message: "Failed to delete user" });
+    }
+  });
+
+  // ============================================================================
   // WEBSOCKET FOR REAL-TIME CHAT
   // ============================================================================
   const httpServer = createServer(app);

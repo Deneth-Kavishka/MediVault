@@ -18,6 +18,7 @@ import Prescriptions from "@/pages/prescriptions";
 import MedicalRecords from "@/pages/medical-records";
 import Notifications from "@/pages/notifications";
 import Messages from "@/pages/messages";
+import AdminUsers from "@/pages/admin-users";
 import { useEffect } from "react";
 
 function Router() {
@@ -55,6 +56,7 @@ function Router() {
       "/inventory",
       "/scanner",
       "/test-results",
+      "/admin/users",
       "/users",
       "/audit-logs",
       "/settings",
@@ -95,6 +97,7 @@ function Router() {
       <Route path="/inventory" component={Dashboard} />
       <Route path="/scanner" component={Dashboard} />
       <Route path="/test-results" component={Dashboard} />
+      <Route path="/admin/users" component={AdminUsers} />
       <Route path="/users" component={Dashboard} />
       <Route path="/audit-logs" component={Dashboard} />
       <Route path="/settings" component={Dashboard} />

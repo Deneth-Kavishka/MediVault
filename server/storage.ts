@@ -57,6 +57,9 @@ export interface IStorage {
   // User operations
   getUser(id: string): Promise<User | undefined>;
   upsertUser(user: UpsertUser): Promise<User>;
+  getAllUsers(): Promise<User[]>;
+  updateUser(id: string, data: Partial<UpsertUser>): Promise<User | undefined>;
+  deleteUser(id: string): Promise<void>;
 
   // Patient operations
   createPatient(patient: InsertPatient): Promise<Patient>;
@@ -139,6 +142,20 @@ export interface IStorage {
   // Chat Message operations
   createChatMessage(message: InsertChatMessage): Promise<ChatMessage>;
   getChatMessages(userId1: string, userId2: string): Promise<ChatMessage[]>;
+
+  // Admin operations
+  getSystemStats(): Promise<{
+    totalUsers: number;
+    activePatients: number;
+    totalAppointments: number;
+    pendingAppointments: number;
+    completedAppointments: number;
+    totalDoctors: number;
+    totalPharmacists: number;
+    totalLabTechs: number;
+    recentUsers: User[];
+  }>;
+  getUsersByRole(role: string): Promise<User[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -164,6 +181,26 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return user;
+  }
+
+  async getAllUsers(): Promise<User[]> {
+    return await db.select().from(users).orderBy(desc(users.createdAt));
+  }
+
+  async updateUser(
+    id: string,
+    data: Partial<UpsertUser>
+  ): Promise<User | undefined> {
+    const [user] = await db
+      .update(users)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning();
+    return user;
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    await db.delete(users).where(eq(users.id, id));
   }
 
   // ============================================================================
@@ -582,6 +619,69 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .orderBy(chatMessages.createdAt);
+  }
+
+  // ============================================================================
+  // ADMIN OPERATIONS
+  // ============================================================================
+
+  async getSystemStats(): Promise<{
+    totalUsers: number;
+    activePatients: number;
+    totalAppointments: number;
+    pendingAppointments: number;
+    completedAppointments: number;
+    totalDoctors: number;
+    totalPharmacists: number;
+    totalLabTechs: number;
+    recentUsers: User[];
+  }> {
+    // Get all counts in parallel
+    const [
+      allUsers,
+      allPatients,
+      allAppointments,
+      allDoctors,
+      allPharmacists,
+      allLabTechs,
+      recentUsers,
+    ] = await Promise.all([
+      db.select().from(users),
+      db.select().from(patients),
+      db.select().from(appointments),
+      db.select().from(doctors),
+      db.select().from(pharmacists),
+      db.select().from(labTechnicians),
+      db.select().from(users).orderBy(desc(users.createdAt)).limit(5),
+    ]);
+
+    // Calculate pending and completed appointments
+    const pendingAppointments = allAppointments.filter(
+      (apt) => apt.status === "scheduled" || apt.status === "pending"
+    ).length;
+    const completedAppointments = allAppointments.filter(
+      (apt) => apt.status === "completed"
+    ).length;
+
+    return {
+      totalUsers: allUsers.length,
+      activePatients: allPatients.length,
+      totalAppointments: allAppointments.length,
+      pendingAppointments,
+      completedAppointments,
+      totalDoctors: allDoctors.length,
+      totalPharmacists: allPharmacists.length,
+      totalLabTechs: allLabTechs.length,
+      recentUsers,
+    };
+  }
+
+  async getUsersByRole(role: string): Promise<User[]> {
+    return await db
+      .select()
+      .from(users)
+      .where(eq(users.role, role))
+      .orderBy(desc(users.createdAt));
   }
 }
 

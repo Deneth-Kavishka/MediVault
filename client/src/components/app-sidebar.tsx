@@ -14,6 +14,9 @@ import {
   Bell,
   LayoutDashboard,
   LogOut,
+  Shield,
+  FileBarChart,
+  UsersRound,
 } from "lucide-react";
 import {
   Sidebar,
@@ -78,11 +81,11 @@ export function AppSidebar() {
         { title: "Test Results", url: "/test-results", icon: FileText },
       ],
       admin: [
-        { title: "Users", url: "/users", icon: Users },
+        { title: "User Management", url: "/admin/users", icon: UsersRound },
         { title: "Patients", url: "/patients", icon: Users },
         { title: "Doctors", url: "/doctors", icon: Users },
         { title: "Appointments", url: "/appointments", icon: Calendar },
-        { title: "Audit Logs", url: "/audit-logs", icon: Activity },
+        { title: "Reports", url: "/audit-logs", icon: FileBarChart },
         { title: "System Settings", url: "/settings", icon: Settings },
       ],
     };

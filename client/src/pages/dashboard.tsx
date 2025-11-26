@@ -353,30 +353,46 @@ function LabTechnicianDashboard() {
 }
 
 function AdminDashboard() {
+  const { data: stats, isLoading } = useQuery({
+    queryKey: ["/api/admin/stats"],
+  });
+
+  if (isLoading) {
+    return <DashboardSkeleton />;
+  }
+
   const statsCards = [
     {
       title: "Total Users",
-      value: "1,247",
+      value: stats?.totalUsers?.toLocaleString() || "0",
       icon: Users,
       color: "text-chart-1",
+      description: `${stats?.totalDoctors || 0} doctors, ${
+        stats?.totalPharmacists || 0
+      } pharmacists, ${stats?.totalLabTechs || 0} lab techs`,
     },
     {
       title: "Active Patients",
-      value: "856",
+      value: stats?.activePatients?.toLocaleString() || "0",
       icon: Users,
       color: "text-chart-2",
+      description: "Registered patients in system",
     },
     {
       title: "Total Appointments",
-      value: "342",
+      value: stats?.totalAppointments?.toLocaleString() || "0",
       icon: Calendar,
       color: "text-chart-3",
+      description: `${stats?.pendingAppointments || 0} pending, ${
+        stats?.completedAppointments || 0
+      } completed`,
     },
     {
-      title: "System Alerts",
-      value: "5",
+      title: "Recent Users",
+      value: stats?.recentUsers?.length?.toString() || "0",
       icon: Bell,
-      color: "text-destructive",
+      color: "text-chart-4",
+      description: "New users in last 24 hours",
     },
   ];
 
@@ -395,10 +411,44 @@ function AdminDashboard() {
               <div className="text-3xl font-bold text-foreground">
                 {stat.value}
               </div>
+              {stat.description && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  {stat.description}
+                </p>
+              )}
             </CardContent>
           </Card>
         ))}
       </div>
+
+      {/* Recent Users Table */}
+      {stats?.recentUsers && stats.recentUsers.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Recent Users</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {stats.recentUsers.map((user: any) => (
+                <div
+                  key={user.id}
+                  className="flex items-center justify-between py-2 border-b last:border-0"
+                >
+                  <div>
+                    <p className="font-medium">
+                      {user.firstName} {user.lastName}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {user.email}
+                    </p>
+                  </div>
+                  <Badge variant="outline">{user.role}</Badge>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
