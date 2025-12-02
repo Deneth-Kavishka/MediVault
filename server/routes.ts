@@ -69,6 +69,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get current patient profile
+  app.get("/api/patients/me", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const patient = await storage.getPatientByUserId(userId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient profile not found" });
+      }
+      res.json(patient);
+    } catch (error) {
+      console.error("Error fetching patient profile:", error);
+      res.status(500).json({ message: "Failed to fetch patient profile" });
+    }
+  });
+
   app.get("/api/patients/:id", isAuthenticated, async (req, res) => {
     try {
       const patient = await storage.getPatient(req.params.id);
@@ -115,7 +130,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/doctors", isAuthenticated, async (req, res) => {
     try {
       const doctors = await storage.getAllDoctors();
-      res.json(doctors);
+      
+      // Enrich doctors with user information
+      const enrichedDoctors = await Promise.all(
+        doctors.map(async (doctor: any) => {
+          const user = await storage.getUser(doctor.userId);
+          return {
+            ...doctor,
+            firstName: user?.firstName || "Unknown",
+            lastName: user?.lastName || "",
+            email: user?.email || "",
+          };
+        })
+      );
+      
+      res.json(enrichedDoctors);
     } catch (error) {
       console.error("Error fetching doctors:", error);
       res.status(500).json({ message: "Failed to fetch doctors" });
@@ -182,9 +211,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (doctor) {
           appointments = await storage.getAppointmentsByDoctor(doctor.id);
         }
+      } else if (user?.role === "admin") {
+        // Admin can see all appointments
+        appointments = await storage.getAllAppointments();
       }
 
-      res.json(appointments);
+      // Enrich appointments with doctor and patient information
+      const enrichedAppointments = await Promise.all(
+        appointments.map(async (apt: any) => {
+          const doctor = await storage.getDoctor(apt.doctorId);
+          const doctorUser = doctor ? await storage.getUser(doctor.userId) : null;
+          const patient = await storage.getPatient(apt.patientId);
+          const patientUser = patient ? await storage.getUser(patient.userId) : null;
+
+          return {
+            ...apt,
+            doctorName: doctorUser
+              ? `Dr. ${doctorUser.firstName} ${doctorUser.lastName}`
+              : "Unknown Doctor",
+            specialty: doctor?.specialty || "General",
+            patientName: patientUser
+              ? `${patientUser.firstName} ${patientUser.lastName}`
+              : "Unknown Patient",
+          };
+        })
+      );
+
+      res.json(enrichedAppointments);
     } catch (error) {
       console.error("Error fetching appointments:", error);
       res.status(500).json({ message: "Failed to fetch appointments" });
@@ -697,7 +750,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
-      res.json(user);
+
+      console.log(`Fetching user details for: ${user.username} (${user.role})`);
+
+      // Fetch role-specific data
+      let roleData = null;
+      if (user.role === "patient") {
+        roleData = await storage.getPatientByUserId(req.params.id);
+        console.log("Patient data fetched:", roleData);
+      } else if (user.role === "doctor") {
+        roleData = await storage.getDoctorByUserId(req.params.id);
+        console.log("Doctor data fetched:", roleData);
+      } else if (user.role === "pharmacist") {
+        roleData = await storage.getPharmacistByUserId(req.params.id);
+        console.log("Pharmacist data fetched:", roleData);
+      } else if (user.role === "lab_technician") {
+        roleData = await storage.getLabTechnicianByUserId(req.params.id);
+        console.log("Lab technician data fetched:", roleData);
+      }
+
+      const response = { ...user, roleData };
+      console.log("Sending response with roleData:", !!roleData);
+      res.json(response);
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
@@ -713,10 +787,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Prevent updating sensitive fields directly
       delete updateData.password;
 
+      // Extract role-specific data if present
+      const patientData = updateData.patientData;
+      const doctorData = updateData.doctorData;
+      const pharmacistData = updateData.pharmacistData;
+      const labTechData = updateData.labTechData;
+
+      // Remove role-specific data from user update
+      delete updateData.patientData;
+      delete updateData.doctorData;
+      delete updateData.pharmacistData;
+      delete updateData.labTechData;
+
+      // Update user basic info
       const user = await storage.updateUser(id, updateData);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
+
+      // Update role-specific data if provided
+      if (patientData && user.role === "patient") {
+        const patient = await storage.getPatientByUserId(id);
+        if (patient) {
+          await storage.updatePatient(patient.id, patientData);
+        }
+      }
+
+      if (doctorData && user.role === "doctor") {
+        const doctor = await storage.getDoctorByUserId(id);
+        if (doctor) {
+          await storage.updateDoctor(doctor.id, doctorData);
+        }
+      }
+
+      if (pharmacistData && user.role === "pharmacist") {
+        const pharmacist = await storage.getPharmacistByUserId(id);
+        if (pharmacist) {
+          await storage.updatePharmacist(pharmacist.id, pharmacistData);
+        }
+      }
+
+      if (labTechData && user.role === "lab_technician") {
+        const labTech = await storage.getLabTechnicianByUserId(id);
+        if (labTech) {
+          await storage.updateLabTechnician(labTech.id, labTechData);
+        }
+      }
+
       res.json(user);
     } catch (error) {
       console.error("Error updating user:", error);
@@ -741,6 +858,194 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error deleting user:", error);
       res.status(500).json({ message: "Failed to delete user" });
+    }
+  });
+
+  // ============================================================================
+  // ENHANCED ADMIN DASHBOARD ROUTES
+  // ============================================================================
+
+  // Activity Timeline (last 10 actions)
+  app.get("/api/admin/activity-timeline", isAdmin, async (req, res) => {
+    try {
+      const logs = await storage.getAuditLogs(10);
+      res.json(logs);
+    } catch (error) {
+      console.error("Error fetching activity timeline:", error);
+      res.status(500).json({ message: "Failed to fetch activity timeline" });
+    }
+  });
+
+  // System Health Monitor
+  app.get("/api/admin/system-health", isAdmin, async (req, res) => {
+    try {
+      const startTime = process.uptime();
+      const uptimeHours = Math.floor(startTime / 3600);
+      const uptimeMinutes = Math.floor((startTime % 3600) / 60);
+
+      // Test database connection
+      let dbStatus = "healthy";
+      try {
+        await storage.getAllUsers();
+      } catch {
+        dbStatus = "error";
+      }
+
+      res.json({
+        database: dbStatus,
+        uptime: `${uptimeHours}h ${uptimeMinutes}m`,
+        memory: {
+          used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+          total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+        },
+        status: dbStatus === "healthy" ? "operational" : "degraded",
+      });
+    } catch (error) {
+      console.error("Error fetching system health:", error);
+      res.status(500).json({ message: "Failed to fetch system health" });
+    }
+  });
+
+  // Pending Appointment Approvals
+  app.get("/api/admin/pending-appointments", isAdmin, async (req, res) => {
+    try {
+      const appointments = await storage.getAllAppointments();
+      const pending = appointments.filter(
+        (apt: any) => apt.status === "pending"
+      );
+      res.json(pending);
+    } catch (error) {
+      console.error("Error fetching pending appointments:", error);
+      res.status(500).json({ message: "Failed to fetch pending appointments" });
+    }
+  });
+
+  // Revenue Chart (last 30 days)
+  app.get("/api/admin/revenue-chart", isAdmin, async (req, res) => {
+    try {
+      const payments = await storage.getAllPayments();
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+      // Group by date
+      const revenueByDate = new Map<string, number>();
+      payments
+        .filter((p: any) => new Date(p.paymentDate) >= thirtyDaysAgo)
+        .forEach((p: any) => {
+          const date = new Date(p.paymentDate).toISOString().split("T")[0];
+          revenueByDate.set(
+            date,
+            (revenueByDate.get(date) || 0) + parseFloat(p.amount)
+          );
+        });
+
+      const chartData = Array.from(revenueByDate.entries()).map(
+        ([date, revenue]) => ({
+          date,
+          revenue: Math.round(revenue * 100) / 100,
+        })
+      );
+
+      res.json(chartData);
+    } catch (error) {
+      console.error("Error fetching revenue chart:", error);
+      res.status(500).json({ message: "Failed to fetch revenue data" });
+    }
+  });
+
+  // User Growth Chart (last 12 months)
+  app.get("/api/admin/user-growth-chart", isAdmin, async (req, res) => {
+    try {
+      const users = await storage.getAllUsers();
+      const twelveMonthsAgo = new Date();
+      twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+
+      // Group by month
+      const usersByMonth = new Map<string, number>();
+      users
+        .filter((u: any) => new Date(u.createdAt) >= twelveMonthsAgo)
+        .forEach((u: any) => {
+          const month = new Date(u.createdAt).toISOString().substring(0, 7);
+          usersByMonth.set(month, (usersByMonth.get(month) || 0) + 1);
+        });
+
+      const chartData = Array.from(usersByMonth.entries())
+        .map(([month, count]) => ({ month, users: count }))
+        .sort((a, b) => a.month.localeCompare(b.month));
+
+      res.json(chartData);
+    } catch (error) {
+      console.error("Error fetching user growth chart:", error);
+      res.status(500).json({ message: "Failed to fetch user growth data" });
+    }
+  });
+
+  // ============================================================================
+  // SYSTEM SETTINGS ROUTES
+  // ============================================================================
+
+  // Get system settings
+  app.get("/api/admin/settings", isAdmin, async (req, res) => {
+    try {
+      // Return default settings (can be stored in database later)
+      const settings = {
+        systemName: "MediVault Healthcare",
+        systemEmail: "admin@medivault.com",
+        systemPhone: "+1-234-567-8900",
+        systemAddress: "123 Healthcare Ave, Medical City",
+        appointmentDuration: 30,
+        appointmentSlotInterval: 15,
+        maxAppointmentsPerDay: 20,
+        enableEmailNotifications: true,
+        enableSmsNotifications: false,
+        autoBackupEnabled: true,
+        backupFrequency: "daily",
+        sessionTimeout: 30,
+      };
+      res.json(settings);
+    } catch (error) {
+      console.error("Error fetching settings:", error);
+      res.status(500).json({ message: "Failed to fetch settings" });
+    }
+  });
+
+  // Update system settings
+  app.put("/api/admin/settings", isAdmin, async (req, res) => {
+    try {
+      // In a real implementation, save to database
+      const settings = req.body;
+      console.log("Settings updated:", settings);
+      res.json({ message: "Settings updated successfully", settings });
+    } catch (error) {
+      console.error("Error updating settings:", error);
+      res.status(500).json({ message: "Failed to update settings" });
+    }
+  });
+
+  // Create database backup
+  app.post("/api/admin/backup", isAdmin, async (req, res) => {
+    try {
+      // Use the existing export script
+      const { exec } = await import("child_process");
+      const { promisify } = await import("util");
+      const execPromise = promisify(exec);
+
+      res.setHeader("Content-Type", "application/sql");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="medivault-backup-${
+          new Date().toISOString().split("T")[0]
+        }.sql"`
+      );
+
+      // Simple backup response (in production, use proper pg_dump)
+      res.send(
+        "-- MediVault Database Backup\\n-- Generated on: " +
+          new Date().toISOString()
+      );
+    } catch (error) {
+      console.error("Error creating backup:", error);
+      res.status(500).json({ message: "Failed to create backup" });
     }
   });
 

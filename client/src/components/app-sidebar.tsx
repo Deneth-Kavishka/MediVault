@@ -84,8 +84,8 @@ export function AppSidebar() {
         { title: "User Management", url: "/admin/users", icon: UsersRound },
         { title: "Patients", url: "/patients", icon: Users },
         { title: "Doctors", url: "/doctors", icon: Users },
-        { title: "Appointments", url: "/appointments", icon: Calendar },
-        { title: "Reports", url: "/audit-logs", icon: FileBarChart },
+        { title: "Appointments", url: "/appointments-admin", icon: Calendar },
+        { title: "Reports & Analytics", url: "/reports", icon: FileBarChart },
         { title: "System Settings", url: "/settings", icon: Settings },
       ],
     };

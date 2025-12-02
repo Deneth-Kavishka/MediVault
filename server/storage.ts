@@ -67,24 +67,43 @@ export interface IStorage {
   getPatientByUserId(userId: string): Promise<Patient | undefined>;
   getPatientByNIC(nic: string): Promise<Patient | undefined>;
   getAllPatients(): Promise<Patient[]>;
+  updatePatient(
+    id: string,
+    data: Partial<InsertPatient>
+  ): Promise<Patient | undefined>;
 
   // Doctor operations
   createDoctor(doctor: InsertDoctor): Promise<Doctor>;
   getDoctor(id: string): Promise<Doctor | undefined>;
   getDoctorByUserId(userId: string): Promise<Doctor | undefined>;
   getAllDoctors(): Promise<Doctor[]>;
+  updateDoctor(
+    id: string,
+    data: Partial<InsertDoctor>
+  ): Promise<Doctor | undefined>;
 
   // Pharmacist operations
   createPharmacist(pharmacist: InsertPharmacist): Promise<Pharmacist>;
   getPharmacist(id: string): Promise<Pharmacist | undefined>;
+  getPharmacistByUserId(userId: string): Promise<Pharmacist | undefined>;
+  updatePharmacist(
+    id: string,
+    data: Partial<InsertPharmacist>
+  ): Promise<Pharmacist | undefined>;
 
   // Lab Technician operations
   createLabTechnician(labTech: InsertLabTechnician): Promise<LabTechnician>;
   getLabTechnician(id: string): Promise<LabTechnician | undefined>;
+  getLabTechnicianByUserId(userId: string): Promise<LabTechnician | undefined>;
+  updateLabTechnician(
+    id: string,
+    data: Partial<InsertLabTechnician>
+  ): Promise<LabTechnician | undefined>;
 
   // Appointment operations
   createAppointment(appointment: InsertAppointment): Promise<Appointment>;
   getAppointment(id: string): Promise<Appointment | undefined>;
+  getAllAppointments(): Promise<Appointment[]>;
   getAppointmentsByPatient(patientId: string): Promise<Appointment[]>;
   getAppointmentsByDoctor(doctorId: string): Promise<Appointment[]>;
   updateAppointmentStatus(
@@ -156,6 +175,7 @@ export interface IStorage {
     recentUsers: User[];
   }>;
   getUsersByRole(role: string): Promise<User[]>;
+  getAuditLogs(limit?: number): Promise<any[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -200,6 +220,71 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteUser(id: string): Promise<void> {
+    // Get patient and doctor records BEFORE deleting them (for cascade deletion)
+    const patientRecords = await db
+      .select()
+      .from(patients)
+      .where(eq(patients.userId, id));
+    const doctorRecords = await db
+      .select()
+      .from(doctors)
+      .where(eq(doctors.userId, id));
+
+    // Delete appointments where user is a patient
+    if (patientRecords.length > 0) {
+      await db
+        .delete(appointments)
+        .where(eq(appointments.patientId, patientRecords[0].id));
+      // Delete medical records for this patient
+      await db
+        .delete(medicalRecords)
+        .where(eq(medicalRecords.patientId, patientRecords[0].id));
+      // Delete prescriptions for this patient
+      await db
+        .delete(prescriptions)
+        .where(eq(prescriptions.patientId, patientRecords[0].id));
+      // Delete lab tests for this patient
+      await db
+        .delete(labTests)
+        .where(eq(labTests.patientId, patientRecords[0].id));
+      // Delete bills for this patient
+      await db.delete(bills).where(eq(bills.patientId, patientRecords[0].id));
+    }
+
+    // Delete appointments where user is a doctor
+    if (doctorRecords.length > 0) {
+      await db
+        .delete(appointments)
+        .where(eq(appointments.doctorId, doctorRecords[0].id));
+      // Delete medical records created by this doctor
+      await db
+        .delete(medicalRecords)
+        .where(eq(medicalRecords.doctorId, doctorRecords[0].id));
+      // Delete prescriptions created by this doctor
+      await db
+        .delete(prescriptions)
+        .where(eq(prescriptions.doctorId, doctorRecords[0].id));
+    }
+
+    // Delete related records
+    await db.delete(patients).where(eq(patients.userId, id));
+    await db.delete(doctors).where(eq(doctors.userId, id));
+    await db.delete(pharmacists).where(eq(pharmacists.userId, id));
+    await db.delete(labTechnicians).where(eq(labTechnicians.userId, id));
+
+    // Delete audit logs for this user
+    await db.delete(auditLogs).where(eq(auditLogs.userId, id));
+
+    // Delete notifications for this user
+    await db.delete(notifications).where(eq(notifications.userId, id));
+
+    // Delete chat messages sent by this user
+    await db.delete(chatMessages).where(eq(chatMessages.senderId, id));
+
+    // Delete chat messages received by this user
+    await db.delete(chatMessages).where(eq(chatMessages.receiverId, id));
+
+    // Finally, delete the user
     await db.delete(users).where(eq(users.id, id));
   }
 
@@ -237,7 +322,43 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAllPatients(): Promise<Patient[]> {
-    return await db.select().from(patients).orderBy(desc(patients.createdAt));
+    const allPatients = await db
+      .select()
+      .from(patients)
+      .orderBy(desc(patients.createdAt));
+
+    const results = await Promise.all(
+      allPatients.map(async (patient) => {
+        const [user] = await db
+          .select({
+            firstName: users.firstName,
+            lastName: users.lastName,
+            email: users.email,
+            username: users.username,
+          })
+          .from(users)
+          .where(eq(users.id, patient.userId));
+
+        return {
+          ...patient,
+          user: user || undefined,
+        };
+      })
+    );
+
+    return results as any;
+  }
+
+  async updatePatient(
+    id: string,
+    data: Partial<InsertPatient>
+  ): Promise<Patient | undefined> {
+    const [patient] = await db
+      .update(patients)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(patients.id, id))
+      .returning();
+    return patient;
   }
 
   // ============================================================================
@@ -263,7 +384,43 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAllDoctors(): Promise<Doctor[]> {
-    return await db.select().from(doctors).orderBy(desc(doctors.createdAt));
+    const allDoctors = await db
+      .select()
+      .from(doctors)
+      .orderBy(desc(doctors.createdAt));
+
+    const results = await Promise.all(
+      allDoctors.map(async (doctor) => {
+        const [user] = await db
+          .select({
+            firstName: users.firstName,
+            lastName: users.lastName,
+            email: users.email,
+            username: users.username,
+          })
+          .from(users)
+          .where(eq(users.id, doctor.userId));
+
+        return {
+          ...doctor,
+          user: user || undefined,
+        };
+      })
+    );
+
+    return results as any;
+  }
+
+  async updateDoctor(
+    id: string,
+    data: Partial<InsertDoctor>
+  ): Promise<Doctor | undefined> {
+    const [doctor] = await db
+      .update(doctors)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(doctors.id, id))
+      .returning();
+    return doctor;
   }
 
   // ============================================================================
@@ -285,6 +442,26 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(pharmacists)
       .where(eq(pharmacists.id, id));
+    return pharmacist;
+  }
+
+  async getPharmacistByUserId(userId: string): Promise<Pharmacist | undefined> {
+    const [pharmacist] = await db
+      .select()
+      .from(pharmacists)
+      .where(eq(pharmacists.userId, userId));
+    return pharmacist;
+  }
+
+  async updatePharmacist(
+    id: string,
+    data: Partial<InsertPharmacist>
+  ): Promise<Pharmacist | undefined> {
+    const [pharmacist] = await db
+      .update(pharmacists)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(pharmacists.id, id))
+      .returning();
     return pharmacist;
   }
 
@@ -310,6 +487,28 @@ export class DatabaseStorage implements IStorage {
     return labTech;
   }
 
+  async getLabTechnicianByUserId(
+    userId: string
+  ): Promise<LabTechnician | undefined> {
+    const [labTech] = await db
+      .select()
+      .from(labTechnicians)
+      .where(eq(labTechnicians.userId, userId));
+    return labTech;
+  }
+
+  async updateLabTechnician(
+    id: string,
+    data: Partial<InsertLabTechnician>
+  ): Promise<LabTechnician | undefined> {
+    const [labTech] = await db
+      .update(labTechnicians)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(labTechnicians.id, id))
+      .returning();
+    return labTech;
+  }
+
   // ============================================================================
   // APPOINTMENT OPERATIONS
   // ============================================================================
@@ -330,6 +529,13 @@ export class DatabaseStorage implements IStorage {
       .from(appointments)
       .where(eq(appointments.id, id));
     return appointment;
+  }
+
+  async getAllAppointments(): Promise<Appointment[]> {
+    return await db
+      .select()
+      .from(appointments)
+      .orderBy(desc(appointments.appointmentDate));
   }
 
   async getAppointmentsByPatient(patientId: string): Promise<Appointment[]> {
@@ -682,6 +888,15 @@ export class DatabaseStorage implements IStorage {
       .from(users)
       .where(eq(users.role, role))
       .orderBy(desc(users.createdAt));
+  }
+
+  async getAuditLogs(limit: number = 10): Promise<any[]> {
+    const logs = await db
+      .select()
+      .from(auditLogs)
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(limit);
+    return logs;
   }
 }
 

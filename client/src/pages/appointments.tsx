@@ -7,7 +7,7 @@ import { isUnauthorizedError } from "@/lib/authUtils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Calendar, Clock, MapPin, User, Plus } from "lucide-react";
+import { Calendar, Clock, MapPin, User, Plus, Filter } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -32,6 +32,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -50,6 +59,7 @@ export default function Appointments() {
   const { user, isLoading, isAuthenticated } = useAuth();
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -64,6 +74,13 @@ export default function Appointments() {
     }
   }, [isAuthenticated, isLoading, toast]);
 
+  // Auto-select table view for admin
+  useEffect(() => {
+    if (user?.role === "admin") {
+      setViewMode("table");
+    }
+  }, [user?.role]);
+
   if (isLoading || !isAuthenticated) {
     return null;
   }
@@ -74,35 +91,63 @@ export default function Appointments() {
         <div>
           <h1 className="text-3xl font-bold text-foreground">Appointments</h1>
           <p className="text-muted-foreground mt-1">
-            Manage your medical appointments
+            {user?.role === "admin"
+              ? "Manage all appointments in the system"
+              : "Manage your medical appointments"}
           </p>
         </div>
 
-        {user?.role === "patient" && (
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button data-testid="button-book-appointment">
-                <Plus className="w-4 h-4 mr-2" />
-                Book Appointment
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-[500px]">
-              <DialogHeader>
-                <DialogTitle>Book New Appointment</DialogTitle>
-              </DialogHeader>
-              <BookAppointmentForm onSuccess={() => setIsDialogOpen(false)} />
-            </DialogContent>
-          </Dialog>
-        )}
+        <div className="flex gap-3">
+          {user?.role === "admin" && (
+            <Button
+              variant="outline"
+              onClick={() => setViewMode(viewMode === "cards" ? "table" : "cards")}
+            >
+              {viewMode === "cards" ? "Table View" : "Card View"}
+            </Button>
+          )}
+          {user?.role === "patient" && (
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-book-appointment">
+                  <Plus className="w-4 h-4 mr-2" />
+                  Book Appointment
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-[500px]">
+                <DialogHeader>
+                  <DialogTitle>Book New Appointment</DialogTitle>
+                </DialogHeader>
+                <BookAppointmentForm onSuccess={() => setIsDialogOpen(false)} />
+              </DialogContent>
+            </Dialog>
+          )}
+        </div>
       </div>
 
-      <AppointmentsList />
+      {viewMode === "table" ? (
+        <AppointmentsTable />
+      ) : (
+        <AppointmentsList />
+      )}
     </div>
   );
 }
 
 function BookAppointmentForm({ onSuccess }: { onSuccess: () => void }) {
   const { toast } = useToast();
+  const { user } = useAuth();
+
+  // Fetch doctors list
+  const { data: doctors = [], isLoading: loadingDoctors } = useQuery<any[]>({
+    queryKey: ["/api/doctors"],
+  });
+
+  // Fetch patient profile to get patientId
+  const { data: patientProfile } = useQuery<any>({
+    queryKey: ["/api/patients/me"],
+    enabled: user?.role === "patient",
+  });
 
   const form = useForm<AppointmentFormValues>({
     resolver: zodResolver(appointmentFormSchema),
@@ -116,7 +161,13 @@ function BookAppointmentForm({ onSuccess }: { onSuccess: () => void }) {
 
   const createAppointment = useMutation({
     mutationFn: async (data: AppointmentFormValues) => {
-      await apiRequest("POST", "/api/appointments", data);
+      if (!patientProfile?.id) {
+        throw new Error("Patient profile not found");
+      }
+      await apiRequest("POST", "/api/appointments", {
+        ...data,
+        patientId: patientProfile.id,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
@@ -160,19 +211,25 @@ function BookAppointmentForm({ onSuccess }: { onSuccess: () => void }) {
               <Select onValueChange={field.onChange} defaultValue={field.value}>
                 <FormControl>
                   <SelectTrigger data-testid="select-doctor">
-                    <SelectValue placeholder="Select a doctor" />
+                    <SelectValue placeholder={loadingDoctors ? "Loading doctors..." : "Select a doctor"} />
                   </SelectTrigger>
                 </FormControl>
                 <SelectContent>
-                  <SelectItem value="doc1">
-                    Dr. Sarah Johnson - Cardiology
-                  </SelectItem>
-                  <SelectItem value="doc2">
-                    Dr. Michael Chen - Neurology
-                  </SelectItem>
-                  <SelectItem value="doc3">
-                    Dr. Emily Davis - Pediatrics
-                  </SelectItem>
+                  {loadingDoctors ? (
+                    <SelectItem value="loading" disabled>
+                      Loading...
+                    </SelectItem>
+                  ) : doctors.length === 0 ? (
+                    <SelectItem value="none" disabled>
+                      No doctors available
+                    </SelectItem>
+                  ) : (
+                    doctors.map((doctor: any) => (
+                      <SelectItem key={doctor.id} value={doctor.id}>
+                        Dr. {doctor.firstName} {doctor.lastName} - {doctor.specialty}
+                      </SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
               <FormMessage />
@@ -249,33 +306,37 @@ function BookAppointmentForm({ onSuccess }: { onSuccess: () => void }) {
 }
 
 function AppointmentsList() {
-  // Mock data for now - will be replaced with real API call
-  const appointments = [
-    {
-      id: "1",
-      doctorName: "Dr. Sarah Johnson",
-      specialty: "Cardiology",
-      date: new Date(2025, 0, 20, 14, 0),
-      status: "confirmed",
-      reason: "Regular checkup",
+  const { user } = useAuth();
+  const { toast } = useToast();
+
+  // Fetch appointments from backend
+  const { data: appointments = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/appointments"],
+    retry: 1,
+  });
+
+  // Cancel appointment mutation
+  const cancelAppointment = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("PATCH", `/api/appointments/${id}/status`, {
+        status: "cancelled",
+      });
     },
-    {
-      id: "2",
-      doctorName: "Dr. Michael Chen",
-      specialty: "Neurology",
-      date: new Date(2025, 0, 25, 10, 30),
-      status: "pending",
-      reason: "Follow-up consultation",
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
+      toast({
+        title: "Success",
+        description: "Appointment cancelled successfully",
+      });
     },
-    {
-      id: "3",
-      doctorName: "Dr. Emily Davis",
-      specialty: "Pediatrics",
-      date: new Date(2025, 0, 15, 9, 0),
-      status: "completed",
-      reason: "Vaccination",
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to cancel appointment",
+        variant: "destructive",
+      });
     },
-  ];
+  });
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -291,6 +352,34 @@ function AppointmentsList() {
         return "bg-muted text-muted-foreground";
     }
   };
+
+  if (isLoading) {
+    return (
+      <div className="text-center py-12">
+        <p className="text-muted-foreground">Loading appointments...</p>
+      </div>
+    );
+  }
+
+  if (appointments.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-12">
+          <div className="text-center space-y-3">
+            <Calendar className="w-12 h-12 mx-auto text-muted-foreground" />
+            <div>
+              <h3 className="text-lg font-semibold">No Appointments</h3>
+              <p className="text-sm text-muted-foreground">
+                {user?.role === "patient"
+                  ? "You haven't booked any appointments yet"
+                  : "No appointments scheduled"}
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -317,11 +406,15 @@ function AppointmentsList() {
           <CardContent className="space-y-3">
             <div className="flex items-center gap-2 text-sm text-foreground">
               <Calendar className="w-4 h-4 text-muted-foreground" />
-              <span>{format(appointment.date, "MMM dd, yyyy")}</span>
+              <span>
+                {format(new Date(appointment.appointmentDate), "MMM dd, yyyy")}
+              </span>
             </div>
             <div className="flex items-center gap-2 text-sm text-foreground">
               <Clock className="w-4 h-4 text-muted-foreground" />
-              <span>{format(appointment.date, "hh:mm a")}</span>
+              <span>
+                {format(new Date(appointment.appointmentDate), "hh:mm a")}
+              </span>
             </div>
             {appointment.reason && (
               <div className="flex items-start gap-2 text-sm text-muted-foreground">
@@ -337,17 +430,25 @@ function AppointmentsList() {
                       size="sm"
                       variant="outline"
                       className="flex-1"
+                      onClick={() => {
+                        toast({
+                          title: "Coming Soon",
+                          description: "Reschedule feature will be available soon",
+                        });
+                      }}
                       data-testid={`button-reschedule-${appointment.id}`}
                     >
                       Reschedule
                     </Button>
                     <Button
                       size="sm"
-                      variant="outline"
+                      variant="destructive"
                       className="flex-1"
+                      onClick={() => cancelAppointment.mutate(appointment.id)}
+                      disabled={cancelAppointment.isPending}
                       data-testid={`button-cancel-${appointment.id}`}
                     >
-                      Cancel
+                      {cancelAppointment.isPending ? "..." : "Cancel"}
                     </Button>
                   </>
                 )}
@@ -356,6 +457,15 @@ function AppointmentsList() {
                   size="sm"
                   variant="outline"
                   className="w-full"
+                  onClick={() => {
+                    toast({
+                      title: "Details",
+                      description: `Appointment completed on ${format(
+                        new Date(appointment.appointmentDate),
+                        "PPP"
+                      )}`,
+                    });
+                  }}
                   data-testid={`button-view-${appointment.id}`}
                 >
                   View Details
@@ -365,6 +475,185 @@ function AppointmentsList() {
           </CardContent>
         </Card>
       ))}
+    </div>
+  );
+}
+
+function AppointmentsTable() {
+  const { toast } = useToast();
+  const [filterStatus, setFilterStatus] = useState("all");
+
+  // Fetch appointments from backend
+  const { data: appointments = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/appointments"],
+    retry: 1,
+  });
+
+  // Update appointment status mutation
+  const updateStatus = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      await apiRequest("PATCH", `/api/appointments/${id}/status`, { status });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
+      toast({
+        title: "Success",
+        description: "Appointment status updated successfully",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update appointment status",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case "confirmed":
+        return "bg-green-500/10 text-green-700 dark:text-green-400";
+      case "pending":
+        return "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400";
+      case "completed":
+        return "bg-blue-500/10 text-blue-700 dark:text-blue-400";
+      case "cancelled":
+        return "bg-red-500/10 text-red-700 dark:text-red-400";
+      default:
+        return "bg-muted text-muted-foreground";
+    }
+  };
+
+  // Filter appointments
+  const filteredAppointments =
+    filterStatus === "all"
+      ? appointments
+      : appointments.filter((apt) => apt.status === filterStatus);
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="py-12">
+          <div className="text-center">
+            <p className="text-muted-foreground">Loading appointments...</p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Filters */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Filter className="w-5 h-5" />
+            Filters
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Status</label>
+              <Select value={filterStatus} onValueChange={setFilterStatus}>
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder="All Statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="confirmed">Confirmed</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                  <SelectItem value="cancelled">Cancelled</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Table */}
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            All Appointments ({filteredAppointments.length})
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ScrollArea className="h-[600px]">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date & Time</TableHead>
+                  <TableHead>Patient</TableHead>
+                  <TableHead>Doctor</TableHead>
+                  <TableHead>Specialty</TableHead>
+                  <TableHead>Reason</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredAppointments.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-8">
+                      <div className="text-muted-foreground">
+                        No appointments found
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filteredAppointments.map((appointment) => (
+                    <TableRow key={appointment.id}>
+                      <TableCell className="font-medium">
+                        {format(
+                          new Date(appointment.appointmentDate),
+                          "MMM dd, yyyy 'at' hh:mm a"
+                        )}
+                      </TableCell>
+                      <TableCell>{appointment.patientName}</TableCell>
+                      <TableCell>{appointment.doctorName}</TableCell>
+                      <TableCell>{appointment.specialty}</TableCell>
+                      <TableCell className="max-w-xs truncate">
+                        {appointment.reason || "N/A"}
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={getStatusColor(appointment.status)}>
+                          {appointment.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Select
+                          value={appointment.status}
+                          onValueChange={(newStatus) =>
+                            updateStatus.mutate({
+                              id: appointment.id,
+                              status: newStatus,
+                            })
+                          }
+                          disabled={updateStatus.isPending}
+                        >
+                          <SelectTrigger className="w-[130px]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="pending">Pending</SelectItem>
+                            <SelectItem value="confirmed">Confirmed</SelectItem>
+                            <SelectItem value="completed">Completed</SelectItem>
+                            <SelectItem value="cancelled">Cancelled</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </ScrollArea>
+        </CardContent>
+      </Card>
     </div>
   );
 }

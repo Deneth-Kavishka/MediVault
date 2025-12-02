@@ -58,6 +58,7 @@ interface User {
   role: string;
   createdAt: string;
   updatedAt: string;
+  roleData?: any; // Role-specific data (patient, doctor, etc.)
 }
 
 const roleColors: Record<string, string> = {
@@ -78,6 +79,8 @@ export default function AdminUsers() {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [originalUserData, setOriginalUserData] = useState<any>(null);
+  const [isLoadingUserData, setIsLoadingUserData] = useState(false);
 
   const [addForm, setAddForm] = useState({
     username: "",
@@ -109,15 +112,52 @@ export default function AdminUsers() {
     lastName: "",
     email: "",
     role: "",
+    // Patient-specific fields
+    nic: "",
+    rfid: "",
+    dateOfBirth: "",
+    gender: "",
+    contactInfo: "",
+    address: "",
+    bloodType: "",
+    allergies: "",
+    // Doctor-specific fields
+    specialization: "",
+    licenseNumber: "",
+    qualifications: "",
+    experience: "",
+    consultationFee: "",
+    // Pharmacist fields
+    pharmacistLicenseNumber: "",
+    // Lab tech fields
+    labTechSpecialization: "",
+    labTechLicenseNumber: "",
   });
 
   // Fetch users
-  const { data: users, isLoading } = useQuery<User[]>({
-    queryKey: [
-      "/api/admin/users",
-      roleFilter !== "all" ? { role: roleFilter } : {},
-    ],
+  const {
+    data: users,
+    isLoading,
+    error,
+  } = useQuery<User[]>({
+    queryKey: ["admin-users", roleFilter],
+    queryFn: async () => {
+      const url =
+        roleFilter !== "all"
+          ? `/api/admin/users?role=${roleFilter}`
+          : "/api/admin/users";
+      const response = await fetch(url, { credentials: "include" });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch users: ${response.statusText}`);
+      }
+      return response.json();
+    },
   });
+
+  // Log any errors
+  if (error) {
+    console.error("Error fetching users:", error);
+  }
 
   // Add user mutation
   const addUserMutation = useMutation({
@@ -165,8 +205,11 @@ export default function AdminUsers() {
       return await api.post("/api/admin/users", payload);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/stats"] });
+      // Invalidate role-specific queries
+      queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/doctors"] });
       toast({
         title: "Success",
         description: "User created successfully",
@@ -210,8 +253,11 @@ export default function AdminUsers() {
       return await api.patch(`/api/admin/users/${id}`, data);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/stats"] });
+      // Invalidate role-specific queries
+      queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/doctors"] });
       toast({
         title: "Success",
         description: "User updated successfully",
@@ -234,8 +280,11 @@ export default function AdminUsers() {
       return await api.delete(`/api/admin/users/${id}`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/stats"] });
+      // Invalidate role-specific queries
+      queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/doctors"] });
       toast({
         title: "Success",
         description: "User deleted successfully",
@@ -265,15 +314,95 @@ export default function AdminUsers() {
     return matchesSearch && matchesRole;
   });
 
-  const handleEditClick = (user: User) => {
+  const handleEditClick = async (user: User) => {
     setSelectedUser(user);
-    setEditForm({
-      firstName: user.firstName || "",
-      lastName: user.lastName || "",
-      email: user.email || "",
-      role: user.role,
-    });
+    setIsLoadingUserData(true);
     setEditDialogOpen(true);
+
+    // Fetch full user data with role-specific details
+    try {
+      const response = await fetch(`/api/admin/users/${user.id}`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to fetch user details");
+
+      const fullUserData = await response.json();
+      console.log("Full user data received:", fullUserData);
+
+      const roleData = fullUserData.roleData || {};
+      console.log("Role data extracted:", roleData);
+      console.log("User role:", fullUserData.role);
+
+      // Store original data for display
+      setOriginalUserData({ ...fullUserData, roleData });
+
+      // Populate form with user data
+      const formData: any = {
+        firstName: fullUserData.firstName || "",
+        lastName: fullUserData.lastName || "",
+        email: fullUserData.email || "",
+        role: fullUserData.role,
+        // Initialize all fields with empty strings to avoid undefined
+        nic: "",
+        rfid: "",
+        dateOfBirth: "",
+        gender: "",
+        contactInfo: "",
+        address: "",
+        bloodType: "",
+        allergies: "",
+        specialization: "",
+        licenseNumber: "",
+        qualifications: "",
+        experience: "",
+        consultationFee: "",
+        pharmacistLicenseNumber: "",
+        labTechSpecialization: "",
+        labTechLicenseNumber: "",
+      };
+
+      // Add role-specific data
+      if (fullUserData.role === "patient") {
+        console.log("Loading patient data:", roleData);
+        formData.nic = roleData.nic || "";
+        formData.rfid = roleData.rfid || "";
+        formData.dateOfBirth = roleData.dateOfBirth
+          ? new Date(roleData.dateOfBirth).toISOString().split("T")[0]
+          : "";
+        formData.gender = roleData.gender || "";
+        formData.contactInfo = roleData.contactInfo || "";
+        formData.address = roleData.address || "";
+        formData.bloodType = roleData.bloodType || "";
+        formData.allergies = roleData.allergies || "";
+      } else if (fullUserData.role === "doctor") {
+        console.log("Loading doctor data:", roleData);
+        formData.specialization = roleData.specialization || "";
+        formData.licenseNumber = roleData.licenseNumber || "";
+        formData.qualifications = roleData.qualifications || "";
+        formData.experience = roleData.experience?.toString() || "";
+        formData.consultationFee = roleData.consultationFee || "";
+      } else if (fullUserData.role === "pharmacist") {
+        console.log("Loading pharmacist data:", roleData);
+        formData.pharmacistLicenseNumber = roleData.licenseNumber || "";
+      } else if (fullUserData.role === "lab_technician") {
+        console.log("Loading lab technician data:", roleData);
+        formData.labTechSpecialization = roleData.specialization || "";
+        formData.labTechLicenseNumber = roleData.licenseNumber || "";
+      }
+
+      console.log("Final form data:", formData);
+      setEditForm(formData);
+      setIsLoadingUserData(false);
+    } catch (error) {
+      console.error("Error loading user details:", error);
+      setIsLoadingUserData(false);
+      setEditDialogOpen(false);
+      toast({
+        title: "Error",
+        description: "Failed to load user details",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleDeleteClick = (user: User) => {
@@ -283,7 +412,46 @@ export default function AdminUsers() {
 
   const handleEditSubmit = () => {
     if (!selectedUser) return;
-    updateUserMutation.mutate({ id: selectedUser.id, data: editForm });
+
+    const payload: any = {
+      firstName: editForm.firstName,
+      lastName: editForm.lastName,
+      email: editForm.email,
+      role: editForm.role,
+    };
+
+    // Add role-specific data
+    if (editForm.role === "patient") {
+      payload.patientData = {
+        nic: editForm.nic,
+        rfid: editForm.rfid,
+        dateOfBirth: editForm.dateOfBirth || null,
+        gender: editForm.gender,
+        contactInfo: editForm.contactInfo,
+        address: editForm.address,
+        bloodType: editForm.bloodType,
+        allergies: editForm.allergies,
+      };
+    } else if (editForm.role === "doctor") {
+      payload.doctorData = {
+        specialization: editForm.specialization,
+        licenseNumber: editForm.licenseNumber,
+        qualifications: editForm.qualifications,
+        experience: editForm.experience ? parseInt(editForm.experience) : null,
+        consultationFee: editForm.consultationFee,
+      };
+    } else if (editForm.role === "pharmacist") {
+      payload.pharmacistData = {
+        licenseNumber: editForm.pharmacistLicenseNumber,
+      };
+    } else if (editForm.role === "lab_technician") {
+      payload.labTechData = {
+        specialization: editForm.labTechSpecialization,
+        licenseNumber: editForm.labTechLicenseNumber,
+      };
+    }
+
+    updateUserMutation.mutate({ id: selectedUser.id, data: payload });
   };
 
   const handleDeleteConfirm = () => {
@@ -842,73 +1010,510 @@ export default function AdminUsers() {
 
       {/* Edit User Dialog */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Edit User</DialogTitle>
+            <DialogTitle>Edit User: {selectedUser?.username}</DialogTitle>
             <DialogDescription>
-              Update user information and role
+              Update user information and role-specific details. Current values
+              are shown below each field.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="firstName">First Name</Label>
-              <Input
-                id="firstName"
-                value={editForm.firstName}
-                onChange={(e) =>
-                  setEditForm({ ...editForm, firstName: e.target.value })
-                }
-              />
+          {isLoadingUserData ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="space-y-3 text-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
+                <p className="text-sm text-muted-foreground">
+                  Loading user details...
+                </p>
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="lastName">Last Name</Label>
-              <Input
-                id="lastName"
-                value={editForm.lastName}
-                onChange={(e) =>
-                  setEditForm({ ...editForm, lastName: e.target.value })
-                }
-              />
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-firstName">First Name</Label>
+                  <Input
+                    id="edit-firstName"
+                    value={editForm.firstName}
+                    onChange={(e) =>
+                      setEditForm({ ...editForm, firstName: e.target.value })
+                    }
+                    placeholder={originalUserData?.firstName || "Not set"}
+                    disabled={isLoadingUserData}
+                  />
+                  {originalUserData?.firstName && (
+                    <p className="text-xs text-muted-foreground">
+                      Current: {originalUserData.firstName}
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-lastName">Last Name</Label>
+                  <Input
+                    id="edit-lastName"
+                    value={editForm.lastName}
+                    onChange={(e) =>
+                      setEditForm({ ...editForm, lastName: e.target.value })
+                    }
+                    placeholder={originalUserData?.lastName || "Not set"}
+                  />
+                  {originalUserData?.lastName && (
+                    <p className="text-xs text-muted-foreground">
+                      Current: {originalUserData.lastName}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-email">Email</Label>
+                <Input
+                  id="edit-email"
+                  type="email"
+                  value={editForm.email}
+                  onChange={(e) =>
+                    setEditForm({ ...editForm, email: e.target.value })
+                  }
+                  placeholder={originalUserData?.email || "Not set"}
+                />
+                {originalUserData?.email && (
+                  <p className="text-xs text-muted-foreground">
+                    Current: {originalUserData.email}
+                  </p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-role">Role</Label>
+                <Select
+                  value={editForm.role}
+                  onValueChange={(value) =>
+                    setEditForm({ ...editForm, role: value })
+                  }
+                  disabled
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="admin">Admin</SelectItem>
+                    <SelectItem value="doctor">Doctor</SelectItem>
+                    <SelectItem value="patient">Patient</SelectItem>
+                    <SelectItem value="pharmacist">Pharmacist</SelectItem>
+                    <SelectItem value="lab_technician">
+                      Lab Technician
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Role cannot be changed after creation
+                </p>
+              </div>
+
+              {/* Patient-specific fields */}
+              {editForm.role === "patient" && (
+                <div className="space-y-4 p-4 border rounded-lg bg-muted/50">
+                  <h4 className="font-medium text-sm">Patient Information</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-nic">NIC</Label>
+                      <Input
+                        id="edit-nic"
+                        value={editForm.nic}
+                        onChange={(e) =>
+                          setEditForm({ ...editForm, nic: e.target.value })
+                        }
+                        placeholder={
+                          originalUserData?.roleData?.nic || "Not set"
+                        }
+                      />
+                      {originalUserData?.roleData?.nic && (
+                        <p className="text-xs text-muted-foreground">
+                          Current: {originalUserData.roleData.nic}
+                        </p>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-rfid">RFID</Label>
+                      <Input
+                        id="edit-rfid"
+                        value={editForm.rfid}
+                        onChange={(e) =>
+                          setEditForm({ ...editForm, rfid: e.target.value })
+                        }
+                        placeholder={
+                          originalUserData?.roleData?.rfid || "Not set"
+                        }
+                      />
+                      {originalUserData?.roleData?.rfid && (
+                        <p className="text-xs text-muted-foreground">
+                          Current: {originalUserData.roleData.rfid}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-dateOfBirth">Date of Birth</Label>
+                      <Input
+                        id="edit-dateOfBirth"
+                        type="date"
+                        value={editForm.dateOfBirth}
+                        onChange={(e) =>
+                          setEditForm({
+                            ...editForm,
+                            dateOfBirth: e.target.value,
+                          })
+                        }
+                      />
+                      {originalUserData?.roleData?.dateOfBirth && (
+                        <p className="text-xs text-muted-foreground">
+                          Current:{" "}
+                          {new Date(
+                            originalUserData.roleData.dateOfBirth
+                          ).toLocaleDateString()}
+                        </p>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-gender">Gender</Label>
+                      <Select
+                        value={editForm.gender}
+                        onValueChange={(value) =>
+                          setEditForm({ ...editForm, gender: value })
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select gender" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="male">Male</SelectItem>
+                          <SelectItem value="female">Female</SelectItem>
+                          <SelectItem value="other">Other</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {originalUserData?.roleData?.gender && (
+                        <p className="text-xs text-muted-foreground">
+                          Current: {originalUserData.roleData.gender}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-contactInfo">Contact Info</Label>
+                    <Input
+                      id="edit-contactInfo"
+                      value={editForm.contactInfo}
+                      onChange={(e) =>
+                        setEditForm({
+                          ...editForm,
+                          contactInfo: e.target.value,
+                        })
+                      }
+                      placeholder={
+                        originalUserData?.roleData?.contactInfo || "Not set"
+                      }
+                    />
+                    {originalUserData?.roleData?.contactInfo && (
+                      <p className="text-xs text-muted-foreground">
+                        Current: {originalUserData.roleData.contactInfo}
+                      </p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-address">Address</Label>
+                    <Input
+                      id="edit-address"
+                      value={editForm.address}
+                      onChange={(e) =>
+                        setEditForm({ ...editForm, address: e.target.value })
+                      }
+                      placeholder={
+                        originalUserData?.roleData?.address || "Not set"
+                      }
+                    />
+                    {originalUserData?.roleData?.address && (
+                      <p className="text-xs text-muted-foreground">
+                        Current: {originalUserData.roleData.address}
+                      </p>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-bloodType">Blood Type</Label>
+                      <Select
+                        value={editForm.bloodType}
+                        onValueChange={(value) =>
+                          setEditForm({ ...editForm, bloodType: value })
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select blood type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="A+">A+</SelectItem>
+                          <SelectItem value="A-">A-</SelectItem>
+                          <SelectItem value="B+">B+</SelectItem>
+                          <SelectItem value="B-">B-</SelectItem>
+                          <SelectItem value="AB+">AB+</SelectItem>
+                          <SelectItem value="AB-">AB-</SelectItem>
+                          <SelectItem value="O+">O+</SelectItem>
+                          <SelectItem value="O-">O-</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {originalUserData?.roleData?.bloodType && (
+                        <p className="text-xs text-muted-foreground">
+                          Current: {originalUserData.roleData.bloodType}
+                        </p>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-allergies">Allergies</Label>
+                      <Input
+                        id="edit-allergies"
+                        value={editForm.allergies}
+                        onChange={(e) =>
+                          setEditForm({
+                            ...editForm,
+                            allergies: e.target.value,
+                          })
+                        }
+                        placeholder={
+                          originalUserData?.roleData?.allergies || "None"
+                        }
+                      />
+                      {originalUserData?.roleData?.allergies && (
+                        <p className="text-xs text-muted-foreground">
+                          Current: {originalUserData.roleData.allergies}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Doctor-specific fields */}
+              {editForm.role === "doctor" && (
+                <div className="space-y-4 p-4 border rounded-lg bg-muted/50">
+                  <h4 className="font-medium text-sm">Doctor Information</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-specialization">
+                        Specialization
+                      </Label>
+                      <Input
+                        id="edit-specialization"
+                        value={editForm.specialization}
+                        onChange={(e) =>
+                          setEditForm({
+                            ...editForm,
+                            specialization: e.target.value,
+                          })
+                        }
+                        placeholder={
+                          originalUserData?.roleData?.specialization ||
+                          "Not set"
+                        }
+                      />
+                      {originalUserData?.roleData?.specialization && (
+                        <p className="text-xs text-muted-foreground">
+                          Current: {originalUserData.roleData.specialization}
+                        </p>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-licenseNumber">License Number</Label>
+                      <Input
+                        id="edit-licenseNumber"
+                        value={editForm.licenseNumber}
+                        onChange={(e) =>
+                          setEditForm({
+                            ...editForm,
+                            licenseNumber: e.target.value,
+                          })
+                        }
+                        placeholder={
+                          originalUserData?.roleData?.licenseNumber || "Not set"
+                        }
+                      />
+                      {originalUserData?.roleData?.licenseNumber && (
+                        <p className="text-xs text-muted-foreground">
+                          Current: {originalUserData.roleData.licenseNumber}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-qualifications">Qualifications</Label>
+                    <Input
+                      id="edit-qualifications"
+                      value={editForm.qualifications}
+                      onChange={(e) =>
+                        setEditForm({
+                          ...editForm,
+                          qualifications: e.target.value,
+                        })
+                      }
+                      placeholder={
+                        originalUserData?.roleData?.qualifications || "Not set"
+                      }
+                    />
+                    {originalUserData?.roleData?.qualifications && (
+                      <p className="text-xs text-muted-foreground">
+                        Current: {originalUserData.roleData.qualifications}
+                      </p>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-experience">
+                        Years of Experience
+                      </Label>
+                      <Input
+                        id="edit-experience"
+                        type="number"
+                        value={editForm.experience}
+                        onChange={(e) =>
+                          setEditForm({
+                            ...editForm,
+                            experience: e.target.value,
+                          })
+                        }
+                        placeholder={
+                          originalUserData?.roleData?.experience?.toString() ||
+                          "0"
+                        }
+                      />
+                      {originalUserData?.roleData?.experience !== undefined && (
+                        <p className="text-xs text-muted-foreground">
+                          Current: {originalUserData.roleData.experience} years
+                        </p>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-consultationFee">
+                        Consultation Fee
+                      </Label>
+                      <Input
+                        id="edit-consultationFee"
+                        type="number"
+                        step="0.01"
+                        value={editForm.consultationFee}
+                        onChange={(e) =>
+                          setEditForm({
+                            ...editForm,
+                            consultationFee: e.target.value,
+                          })
+                        }
+                        placeholder={
+                          originalUserData?.roleData?.consultationFee || "0.00"
+                        }
+                      />
+                      {originalUserData?.roleData?.consultationFee && (
+                        <p className="text-xs text-muted-foreground">
+                          Current: $
+                          {Number(
+                            originalUserData.roleData.consultationFee
+                          ).toFixed(2)}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Pharmacist-specific fields */}
+              {editForm.role === "pharmacist" && (
+                <div className="space-y-4 p-4 border rounded-lg bg-muted/50">
+                  <h4 className="font-medium text-sm">
+                    Pharmacist Information
+                  </h4>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-pharm-license">License Number</Label>
+                    <Input
+                      id="edit-pharm-license"
+                      value={editForm.pharmacistLicenseNumber}
+                      onChange={(e) =>
+                        setEditForm({
+                          ...editForm,
+                          pharmacistLicenseNumber: e.target.value,
+                        })
+                      }
+                      placeholder={
+                        originalUserData?.roleData?.licenseNumber || "Not set"
+                      }
+                    />
+                    {originalUserData?.roleData?.licenseNumber && (
+                      <p className="text-xs text-muted-foreground">
+                        Current: {originalUserData.roleData.licenseNumber}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Lab Technician-specific fields */}
+              {editForm.role === "lab_technician" && (
+                <div className="space-y-4 p-4 border rounded-lg bg-muted/50">
+                  <h4 className="font-medium text-sm">
+                    Lab Technician Information
+                  </h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-labtech-spec">Specialization</Label>
+                      <Input
+                        id="edit-labtech-spec"
+                        value={editForm.labTechSpecialization}
+                        onChange={(e) =>
+                          setEditForm({
+                            ...editForm,
+                            labTechSpecialization: e.target.value,
+                          })
+                        }
+                        placeholder={
+                          originalUserData?.roleData?.specialization ||
+                          "Not set"
+                        }
+                      />
+                      {originalUserData?.roleData?.specialization && (
+                        <p className="text-xs text-muted-foreground">
+                          Current: {originalUserData.roleData.specialization}
+                        </p>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-labtech-license">
+                        License Number
+                      </Label>
+                      <Input
+                        id="edit-labtech-license"
+                        value={editForm.labTechLicenseNumber}
+                        onChange={(e) =>
+                          setEditForm({
+                            ...editForm,
+                            labTechLicenseNumber: e.target.value,
+                          })
+                        }
+                        placeholder={
+                          originalUserData?.roleData?.licenseNumber || "Not set"
+                        }
+                      />
+                      {originalUserData?.roleData?.licenseNumber && (
+                        <p className="text-xs text-muted-foreground">
+                          Current: {originalUserData.roleData.licenseNumber}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                value={editForm.email}
-                onChange={(e) =>
-                  setEditForm({ ...editForm, email: e.target.value })
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="role">Role</Label>
-              <Select
-                value={editForm.role}
-                onValueChange={(value) =>
-                  setEditForm({ ...editForm, role: value })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="admin">Admin</SelectItem>
-                  <SelectItem value="doctor">Doctor</SelectItem>
-                  <SelectItem value="patient">Patient</SelectItem>
-                  <SelectItem value="pharmacist">Pharmacist</SelectItem>
-                  <SelectItem value="lab_technician">Lab Technician</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditDialogOpen(false)}>
               Cancel
             </Button>
             <Button
               onClick={handleEditSubmit}
-              disabled={updateUserMutation.isPending}
+              disabled={updateUserMutation.isPending || isLoadingUserData}
             >
               {updateUserMutation.isPending ? "Saving..." : "Save Changes"}
             </Button>

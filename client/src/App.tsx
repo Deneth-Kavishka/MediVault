@@ -19,6 +19,11 @@ import MedicalRecords from "@/pages/medical-records";
 import Notifications from "@/pages/notifications";
 import Messages from "@/pages/messages";
 import AdminUsers from "@/pages/admin-users";
+import AdminPatients from "@/pages/admin-patients";
+import AdminDoctors from "@/pages/admin-doctors";
+import AdminAppointments from "@/pages/admin-appointments";
+import ReportsPage from "@/pages/reports";
+import SettingsPage from "@/pages/settings";
 import { useEffect } from "react";
 
 function Router() {
@@ -53,12 +58,14 @@ function Router() {
       "/bills",
       "/patients",
       "/doctors",
+      "/appointments-admin",
       "/inventory",
       "/scanner",
       "/test-results",
       "/admin/users",
       "/users",
       "/audit-logs",
+      "/reports",
       "/settings",
     ];
 
@@ -92,15 +99,17 @@ function Router() {
       <Route path="/lab-results" component={Dashboard} />
       <Route path="/lab-tests" component={Dashboard} />
       <Route path="/bills" component={Dashboard} />
-      <Route path="/patients" component={Dashboard} />
-      <Route path="/doctors" component={Dashboard} />
+      <Route path="/patients" component={AdminPatients} />
+      <Route path="/doctors" component={AdminDoctors} />
+      <Route path="/appointments-admin" component={AdminAppointments} />
       <Route path="/inventory" component={Dashboard} />
       <Route path="/scanner" component={Dashboard} />
       <Route path="/test-results" component={Dashboard} />
       <Route path="/admin/users" component={AdminUsers} />
       <Route path="/users" component={Dashboard} />
       <Route path="/audit-logs" component={Dashboard} />
-      <Route path="/settings" component={Dashboard} />
+      <Route path="/reports" component={ReportsPage} />
+      <Route path="/settings" component={SettingsPage} />
 
       {/* 404 */}
       <Route component={NotFound} />
