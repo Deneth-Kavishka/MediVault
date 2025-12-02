@@ -101,7 +101,9 @@ export default function Appointments() {
           {user?.role === "admin" && (
             <Button
               variant="outline"
-              onClick={() => setViewMode(viewMode === "cards" ? "table" : "cards")}
+              onClick={() =>
+                setViewMode(viewMode === "cards" ? "table" : "cards")
+              }
             >
               {viewMode === "cards" ? "Table View" : "Card View"}
             </Button>
@@ -125,11 +127,7 @@ export default function Appointments() {
         </div>
       </div>
 
-      {viewMode === "table" ? (
-        <AppointmentsTable />
-      ) : (
-        <AppointmentsList />
-      )}
+      {viewMode === "table" ? <AppointmentsTable /> : <AppointmentsList />}
     </div>
   );
 }
@@ -211,7 +209,13 @@ function BookAppointmentForm({ onSuccess }: { onSuccess: () => void }) {
               <Select onValueChange={field.onChange} defaultValue={field.value}>
                 <FormControl>
                   <SelectTrigger data-testid="select-doctor">
-                    <SelectValue placeholder={loadingDoctors ? "Loading doctors..." : "Select a doctor"} />
+                    <SelectValue
+                      placeholder={
+                        loadingDoctors
+                          ? "Loading doctors..."
+                          : "Select a doctor"
+                      }
+                    />
                   </SelectTrigger>
                 </FormControl>
                 <SelectContent>
@@ -226,7 +230,8 @@ function BookAppointmentForm({ onSuccess }: { onSuccess: () => void }) {
                   ) : (
                     doctors.map((doctor: any) => (
                       <SelectItem key={doctor.id} value={doctor.id}>
-                        Dr. {doctor.firstName} {doctor.lastName} - {doctor.specialty}
+                        Dr. {doctor.firstName} {doctor.lastName} -{" "}
+                        {doctor.specialty}
                       </SelectItem>
                     ))
                   )}
@@ -433,7 +438,8 @@ function AppointmentsList() {
                       onClick={() => {
                         toast({
                           title: "Coming Soon",
-                          description: "Reschedule feature will be available soon",
+                          description:
+                            "Reschedule feature will be available soon",
                         });
                       }}
                       data-testid={`button-reschedule-${appointment.id}`}

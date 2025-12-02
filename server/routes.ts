@@ -130,7 +130,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/doctors", isAuthenticated, async (req, res) => {
     try {
       const doctors = await storage.getAllDoctors();
-      
+
       // Enrich doctors with user information
       const enrichedDoctors = await Promise.all(
         doctors.map(async (doctor: any) => {
@@ -143,7 +143,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           };
         })
       );
-      
+
       res.json(enrichedDoctors);
     } catch (error) {
       console.error("Error fetching doctors:", error);
@@ -220,9 +220,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const enrichedAppointments = await Promise.all(
         appointments.map(async (apt: any) => {
           const doctor = await storage.getDoctor(apt.doctorId);
-          const doctorUser = doctor ? await storage.getUser(doctor.userId) : null;
+          const doctorUser = doctor
+            ? await storage.getUser(doctor.userId)
+            : null;
           const patient = await storage.getPatient(apt.patientId);
-          const patientUser = patient ? await storage.getUser(patient.userId) : null;
+          const patientUser = patient
+            ? await storage.getUser(patient.userId)
+            : null;
 
           return {
             ...apt,
