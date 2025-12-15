@@ -596,9 +596,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   );
 
+  // Mark all notifications as read for current user
+  app.patch(
+    "/api/notifications/mark-all-read",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        await storage.markAllNotificationsAsRead(userId);
+        res.json({ message: "All notifications marked as read" });
+      } catch (error) {
+        console.error("Error marking all notifications as read:", error);
+        res
+          .status(500)
+          .json({ message: "Failed to mark all notifications as read" });
+      }
+    }
+  );
+
   // ============================================================================
   // CHAT MESSAGE ROUTES
   // ============================================================================
+
+  // Get all users for starting new conversations
+  app.get("/api/users/available", isAuthenticated, async (req: any, res) => {
+    try {
+      const currentUserId = req.user.id;
+      const allUsers = await storage.getAllUsers();
+      // Filter out current user and return basic info
+      const availableUsers = allUsers
+        .filter((u) => u.id !== currentUserId)
+        .map((u) => ({
+          id: u.id,
+          name: u.fullName || u.username,
+          role: u.role,
+          username: u.username,
+        }));
+      res.json(availableUsers);
+    } catch (error) {
+      console.error("Error fetching available users:", error);
+      res.status(500).json({ message: "Failed to fetch available users" });
+    }
+  });
+
+  // Get conversation list (users you've chatted with)
+  app.get("/api/conversations", isAuthenticated, async (req: any, res) => {
+    try {
+      const currentUserId = req.user.id;
+      const conversations = await storage.getConversations(currentUserId);
+      res.json(conversations);
+    } catch (error) {
+      console.error("Error fetching conversations:", error);
+      res.status(500).json({ message: "Failed to fetch conversations" });
+    }
+  }); // Get messages with a specific user
   app.get("/api/messages/:userId", isAuthenticated, async (req: any, res) => {
     try {
       const currentUserId = req.user.id;
@@ -614,6 +665,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Send a new message
   app.post("/api/messages", isAuthenticated, async (req: any, res) => {
     try {
       const currentUserId = req.user.id;
@@ -630,6 +682,116 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .json({ message: error.message || "Failed to create message" });
     }
   });
+
+  // Mark messages as read
+  app.patch(
+    "/api/messages/:userId/read",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const currentUserId = req.user.id;
+        const otherUserId = req.params.userId;
+        await storage.markMessagesAsRead(currentUserId, otherUserId);
+        res.json({ message: "Messages marked as read" });
+      } catch (error) {
+        console.error("Error marking messages as read:", error);
+        res.status(500).json({ message: "Failed to mark messages as read" });
+      }
+    }
+  );
+
+  // Delete a message
+  app.delete(
+    "/api/messages/:messageId",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const currentUserId = req.user.id;
+        const messageId = req.params.messageId;
+
+        // Verify the message belongs to the current user
+        const message = await storage.getChatMessageById(messageId);
+        if (!message || message.senderId !== currentUserId) {
+          return res.status(403).json({ message: "Unauthorized" });
+        }
+
+        await storage.deleteChatMessage(messageId);
+
+        // Broadcast delete event via WebSocket
+        broadcastToUser(message.senderId, {
+          type: "message_deleted",
+          data: {
+            messageId,
+            senderId: message.senderId,
+            receiverId: message.receiverId,
+          },
+        });
+        broadcastToUser(message.receiverId, {
+          type: "message_deleted",
+          data: {
+            messageId,
+            senderId: message.senderId,
+            receiverId: message.receiverId,
+          },
+        });
+
+        res.json({ message: "Message deleted" });
+      } catch (error) {
+        console.error("Error deleting message:", error);
+        res.status(500).json({ message: "Failed to delete message" });
+      }
+    }
+  );
+
+  // Edit a message
+  app.patch(
+    "/api/messages/:messageId",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const currentUserId = req.user.id;
+        const messageId = req.params.messageId;
+        const { message } = req.body;
+
+        if (!message || !message.trim()) {
+          return res.status(400).json({ message: "Message cannot be empty" });
+        }
+
+        // Verify the message belongs to the current user
+        const existingMessage = await storage.getChatMessageById(messageId);
+        if (!existingMessage || existingMessage.senderId !== currentUserId) {
+          return res.status(403).json({ message: "Unauthorized" });
+        }
+
+        await storage.updateChatMessage(messageId, message.trim());
+
+        // Broadcast edit event via WebSocket
+        broadcastToUser(existingMessage.senderId, {
+          type: "message_edited",
+          data: {
+            messageId,
+            message: message.trim(),
+            senderId: existingMessage.senderId,
+            receiverId: existingMessage.receiverId,
+          },
+        });
+        broadcastToUser(existingMessage.receiverId, {
+          type: "message_edited",
+          data: {
+            messageId,
+            message: message.trim(),
+            senderId: existingMessage.senderId,
+            receiverId: existingMessage.receiverId,
+          },
+        });
+
+        res.json({ message: "Message updated" });
+      } catch (error) {
+        console.error("Error updating message:", error);
+        res.status(500).json({ message: "Failed to update message" });
+      }
+    }
+  );
 
   // ============================================================================
   // ADMIN ROUTES
@@ -747,6 +909,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get deactivated users
+  app.get("/api/admin/users/deactivated", isAdmin, async (req, res) => {
+    try {
+      const users = await storage.getDeactivatedUsers();
+      res.json(users);
+    } catch (error) {
+      console.error("Error fetching deactivated users:", error);
+      res.status(500).json({ message: "Failed to fetch deactivated users" });
+    }
+  });
+
   // Get specific user by ID
   app.get("/api/admin/users/:id", isAdmin, async (req, res) => {
     try {
@@ -845,23 +1018,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Delete user
+  // Deactivate user (soft delete)
   app.delete("/api/admin/users/:id", isAdmin, async (req, res) => {
     try {
       const { id } = req.params;
 
-      // Prevent deleting self
+      // Prevent deactivating self
       if ((req as any).user.id === id) {
         return res
           .status(400)
-          .json({ message: "Cannot delete your own account" });
+          .json({ message: "Cannot deactivate your own account" });
       }
 
-      await storage.deleteUser(id);
-      res.json({ message: "User deleted successfully" });
+      const user = await storage.deactivateUser(id);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      res.json({ message: "User deactivated successfully", user });
     } catch (error) {
-      console.error("Error deleting user:", error);
-      res.status(500).json({ message: "Failed to delete user" });
+      console.error("Error deactivating user:", error);
+      res.status(500).json({ message: "Failed to deactivate user" });
+    }
+  });
+
+  // Reactivate user
+  app.patch("/api/admin/users/:id/reactivate", isAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = await storage.reactivateUser(id);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      res.json({ message: "User reactivated successfully", user });
+    } catch (error) {
+      console.error("Error reactivating user:", error);
+      res.status(500).json({ message: "Failed to reactivate user" });
     }
   });
 
@@ -1059,6 +1250,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
 
+  // Track online users: Map of userId -> Set of WebSocket connections (for multi-tab support)
+  const onlineUsers = new Map<string, Set<WebSocket>>();
+
+  // Helper function to broadcast to specific user
+  const broadcastToUser = (userId: string, data: any) => {
+    let sent = 0;
+    wss.clients.forEach((client) => {
+      if (
+        client.readyState === WebSocket.OPEN &&
+        (client as any).userId === userId
+      ) {
+        client.send(JSON.stringify(data));
+        sent++;
+      }
+    });
+    console.log(`📡 Broadcast to user ${userId}: ${sent} client(s)`);
+  };
+
+  // Helper function to broadcast to all authenticated users
+  const broadcastToAll = (data: any) => {
+    let sent = 0;
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN && (client as any).userId) {
+        client.send(JSON.stringify(data));
+        sent++;
+      }
+    });
+    console.log(`📡 Broadcast to all: ${sent} client(s)`);
+  };
+
+  // Get list of all online user IDs
+  const getOnlineUserIds = (): string[] => {
+    return Array.from(onlineUsers.keys());
+  };
+
   // WebSocket authentication and connection handling
   wss.on("connection", (ws: WebSocket, req: any) => {
     console.log("New WebSocket connection attempt");
@@ -1085,31 +1311,92 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Store user ID with the WebSocket connection
       (ws as any).userId = userId;
 
+      // Add user to online users tracking
+      if (!onlineUsers.has(userId)) {
+        onlineUsers.set(userId, new Set());
+      }
+      onlineUsers.get(userId)!.add(ws);
+      console.log(
+        `👤 User ${userId} is now ONLINE (${
+          onlineUsers.get(userId)!.size
+        } connection(s))`
+      );
+
+      // Broadcast to all users that this user is now online
+      broadcastToAll({
+        type: "user_online",
+        data: { userId, onlineUsers: getOnlineUserIds() },
+      });
+
       ws.on("message", (message: string) => {
         try {
           const data = JSON.parse(message.toString());
+          console.log("📤 WebSocket message from user:", userId, data);
 
           // Add sender information
           data.senderId = userId;
           data.timestamp = new Date().toISOString();
 
           // Broadcast message to all authenticated clients
+          // This includes the recipient and also back to sender for multi-tab support
+          let broadcastCount = 0;
           wss.clients.forEach((client) => {
             if (
-              client !== ws &&
               client.readyState === WebSocket.OPEN &&
               (client as any).userId // Only send to authenticated clients
             ) {
-              client.send(JSON.stringify(data));
+              const clientUserId = (client as any).userId;
+
+              // Send to the message recipient or back to sender (for multi-tab sync)
+              if (data.type === "message" && data.data) {
+                const msgData = data.data;
+                if (
+                  clientUserId === msgData.receiverId ||
+                  clientUserId === msgData.senderId
+                ) {
+                  client.send(JSON.stringify(data));
+                  broadcastCount++;
+                  console.log(`  ✅ Sent to user: ${clientUserId}`);
+                }
+              } else {
+                // For non-message data, broadcast to everyone except sender
+                if (client !== ws) {
+                  client.send(JSON.stringify(data));
+                  broadcastCount++;
+                }
+              }
             }
           });
+          console.log(`📡 Broadcast to ${broadcastCount} client(s)`);
         } catch (error) {
-          console.error("Error processing WebSocket message:", error);
+          console.error("❌ Error processing WebSocket message:", error);
         }
       });
 
       ws.on("close", () => {
         console.log(`WebSocket connection closed for user: ${userId}`);
+
+        // Remove this connection from online users
+        const userConnections = onlineUsers.get(userId);
+        if (userConnections) {
+          userConnections.delete(ws);
+
+          // If user has no more connections, mark them as offline
+          if (userConnections.size === 0) {
+            onlineUsers.delete(userId);
+            console.log(`👤 User ${userId} is now OFFLINE`);
+
+            // Broadcast to all users that this user is now offline
+            broadcastToAll({
+              type: "user_offline",
+              data: { userId, onlineUsers: getOnlineUserIds() },
+            });
+          } else {
+            console.log(
+              `👤 User ${userId} still has ${userConnections.size} connection(s)`
+            );
+          }
+        }
       });
 
       ws.on("error", (error) => {

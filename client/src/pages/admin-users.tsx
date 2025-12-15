@@ -46,8 +46,17 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
-import { Search, UserPlus, Edit, Trash2, Users } from "lucide-react";
+import {
+  Search,
+  UserPlus,
+  Edit,
+  Trash2,
+  Users,
+  UserX,
+  RefreshCw,
+} from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface User {
   id: string;
@@ -56,6 +65,8 @@ interface User {
   firstName?: string;
   lastName?: string;
   role: string;
+  isActive: boolean;
+  deactivatedAt?: string;
   createdAt: string;
   updatedAt: string;
   roleData?: any; // Role-specific data (patient, doctor, etc.)
@@ -73,6 +84,9 @@ export default function AdminUsers() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
+  const [activeTab, setActiveTab] = useState<"active" | "deactivated">(
+    "active"
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [addDialogOpen, setAddDialogOpen] = useState(false);
@@ -134,7 +148,7 @@ export default function AdminUsers() {
     labTechLicenseNumber: "",
   });
 
-  // Fetch users
+  // Fetch active users
   const {
     data: users,
     isLoading,
@@ -149,6 +163,24 @@ export default function AdminUsers() {
       const response = await fetch(url, { credentials: "include" });
       if (!response.ok) {
         throw new Error(`Failed to fetch users: ${response.statusText}`);
+      }
+      return response.json();
+    },
+  });
+
+  // Fetch deactivated users
+  const { data: deactivatedUsers, isLoading: isLoadingDeactivated } = useQuery<
+    User[]
+  >({
+    queryKey: ["admin-users-deactivated"],
+    queryFn: async () => {
+      const response = await fetch("/api/admin/users/deactivated", {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        throw new Error(
+          `Failed to fetch deactivated users: ${response.statusText}`
+        );
       }
       return response.json();
     },
@@ -274,20 +306,21 @@ export default function AdminUsers() {
     },
   });
 
-  // Delete user mutation
+  // Deactivate user mutation (soft delete)
   const deleteUserMutation = useMutation({
     mutationFn: async (id: string) => {
       return await api.delete(`/api/admin/users/${id}`);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-users-deactivated"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/stats"] });
       // Invalidate role-specific queries
       queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
       queryClient.invalidateQueries({ queryKey: ["/api/doctors"] });
       toast({
         title: "Success",
-        description: "User deleted successfully",
+        description: "User deactivated successfully",
       });
       setDeleteDialogOpen(false);
       setSelectedUser(null);
@@ -295,14 +328,53 @@ export default function AdminUsers() {
     onError: (error: Error) => {
       toast({
         title: "Error",
-        description: error.message || "Failed to delete user",
+        description: error.message || "Failed to deactivate user",
         variant: "destructive",
       });
     },
   });
 
-  // Filter users based on search and role
+  // Reactivate user mutation
+  const reactivateUserMutation = useMutation({
+    mutationFn: async (id: string) => {
+      return await api.patch(`/api/admin/users/${id}/reactivate`, {});
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-users-deactivated"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/stats"] });
+      // Invalidate role-specific queries
+      queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/doctors"] });
+      toast({
+        title: "Success",
+        description: "User reactivated successfully",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to reactivate user",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Filter active users based on search and role
   const filteredUsers = users?.filter((user) => {
+    const matchesSearch =
+      user.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      user.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      user.firstName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      user.lastName?.toLowerCase().includes(searchQuery.toLowerCase());
+
+    const matchesRole = roleFilter === "all" || user.role === roleFilter;
+
+    return matchesSearch && matchesRole;
+  });
+
+  // Filter deactivated users based on search and role
+  const filteredDeactivatedUsers = deactivatedUsers?.filter((user) => {
     const matchesSearch =
       user.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
       user.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -532,7 +604,7 @@ export default function AdminUsers() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-5">
+      <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -561,20 +633,30 @@ export default function AdminUsers() {
         )}
       </div>
 
-      {/* Users Table */}
+      {/* Users Management with Tabs */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <CardTitle>All Users</CardTitle>
+              <CardTitle>User Management</CardTitle>
               <CardDescription>
-                View and manage all registered users in the system
+                View and manage active and deactivated users
               </CardDescription>
             </div>
-            <Button onClick={() => setAddDialogOpen(true)}>
-              <UserPlus className="h-4 w-4 mr-2" />
-              Add User
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setActiveTab("deactivated")}
+                disabled={activeTab === "deactivated"}
+              >
+                <UserX className="h-4 w-4 mr-2" />
+                Deactivated Users ({deactivatedUsers?.length || 0})
+              </Button>
+              <Button onClick={() => setAddDialogOpen(true)}>
+                <UserPlus className="h-4 w-4 mr-2" />
+                Add User
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -604,80 +686,177 @@ export default function AdminUsers() {
             </Select>
           </div>
 
-          {/* Table */}
-          <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Username</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Joined</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredUsers && filteredUsers.length > 0 ? (
-                  filteredUsers.map((user) => (
-                    <TableRow key={user.id}>
-                      <TableCell className="font-medium">
-                        {user.username}
-                      </TableCell>
-                      <TableCell>
-                        {user.firstName || user.lastName
-                          ? `${user.firstName || ""} ${
-                              user.lastName || ""
-                            }`.trim()
-                          : "—"}
-                      </TableCell>
-                      <TableCell>{user.email || "—"}</TableCell>
-                      <TableCell>
-                        <Badge
-                          variant="outline"
-                          className={`${
-                            roleColors[user.role]
-                          } text-white border-0`}
-                        >
-                          {user.role.replace("_", " ")}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {new Date(user.createdAt).toLocaleDateString()}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleEditClick(user)}
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleDeleteClick(user)}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </div>
-                      </TableCell>
+          {/* Tabs for Active and Deactivated Users */}
+          <Tabs
+            value={activeTab}
+            onValueChange={(v) => setActiveTab(v as "active" | "deactivated")}
+          >
+            <TabsList className="grid w-full grid-cols-2 max-w-[400px]">
+              <TabsTrigger value="active">
+                Active Users ({filteredUsers?.length || 0})
+              </TabsTrigger>
+              <TabsTrigger value="deactivated">
+                Deactivated ({filteredDeactivatedUsers?.length || 0})
+              </TabsTrigger>
+            </TabsList>
+
+            {/* Active Users Tab */}
+            <TabsContent value="active" className="mt-4">
+              {/* Table */}
+              <div className="rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Username</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Role</TableHead>
+                      <TableHead>Joined</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ))
-                ) : (
-                  <TableRow>
-                    <TableCell
-                      colSpan={6}
-                      className="text-center text-muted-foreground"
-                    >
-                      No users found
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredUsers && filteredUsers.length > 0 ? (
+                      filteredUsers.map((user) => (
+                        <TableRow key={user.id}>
+                          <TableCell className="font-medium">
+                            {user.username}
+                          </TableCell>
+                          <TableCell>
+                            {user.firstName || user.lastName
+                              ? `${user.firstName || ""} ${
+                                  user.lastName || ""
+                                }`.trim()
+                              : "—"}
+                          </TableCell>
+                          <TableCell>{user.email || "—"}</TableCell>
+                          <TableCell>
+                            <Badge
+                              variant="outline"
+                              className={`${
+                                roleColors[user.role]
+                              } text-white border-0`}
+                            >
+                              {user.role.replace("_", " ")}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {new Date(user.createdAt).toLocaleDateString()}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleEditClick(user)}
+                                title="Edit user"
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleDeleteClick(user)}
+                                title="Deactivate user"
+                              >
+                                <UserX className="h-4 w-4 text-orange-500" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell
+                          colSpan={6}
+                          className="text-center text-muted-foreground"
+                        >
+                          No users found
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </TabsContent>
+
+            {/* Deactivated Users Tab */}
+            <TabsContent value="deactivated" className="mt-4">
+              <div className="rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Username</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Role</TableHead>
+                      <TableHead>Deactivated</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredDeactivatedUsers &&
+                    filteredDeactivatedUsers.length > 0 ? (
+                      filteredDeactivatedUsers.map((user) => (
+                        <TableRow key={user.id}>
+                          <TableCell className="font-medium">
+                            {user.username}
+                          </TableCell>
+                          <TableCell>
+                            {user.firstName || user.lastName
+                              ? `${user.firstName || ""} ${
+                                  user.lastName || ""
+                                }`.trim()
+                              : "—"}
+                          </TableCell>
+                          <TableCell>{user.email || "—"}</TableCell>
+                          <TableCell>
+                            <Badge
+                              variant="outline"
+                              className={`${
+                                roleColors[user.role]
+                              } text-white border-0`}
+                            >
+                              {user.role.replace("_", " ")}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {user.deactivatedAt
+                              ? new Date(
+                                  user.deactivatedAt
+                                ).toLocaleDateString()
+                              : "—"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() =>
+                                reactivateUserMutation.mutate(user.id)
+                              }
+                              disabled={reactivateUserMutation.isPending}
+                            >
+                              <RefreshCw className="h-4 w-4 mr-2" />
+                              Reactivate
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell
+                          colSpan={6}
+                          className="text-center text-muted-foreground"
+                        >
+                          No deactivated users found
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </TabsContent>
+          </Tabs>
         </CardContent>
       </Card>
 
@@ -1521,25 +1700,29 @@ export default function AdminUsers() {
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirmation Dialog */}
+      {/* Deactivate Confirmation Dialog */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogTitle>Deactivate User?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete the user{" "}
-              <span className="font-semibold">{selectedUser?.username}</span>{" "}
-              and all associated data. This action cannot be undone.
+              This will deactivate the user{" "}
+              <span className="font-semibold">{selectedUser?.username}</span>.{" "}
+              The user will not be able to log in, but their data will be
+              preserved. You can reactivate this user anytime from the
+              Deactivated Users tab.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDeleteConfirm}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className="bg-orange-500 text-white hover:bg-orange-600"
               disabled={deleteUserMutation.isPending}
             >
-              {deleteUserMutation.isPending ? "Deleting..." : "Delete User"}
+              {deleteUserMutation.isPending
+                ? "Deactivating..."
+                : "Deactivate User"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

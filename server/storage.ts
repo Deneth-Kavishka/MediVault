@@ -51,15 +51,18 @@ import {
   type InsertChatMessage,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, or, desc, sql, inArray } from "drizzle-orm";
 
 export interface IStorage {
   // User operations
   getUser(id: string): Promise<User | undefined>;
   upsertUser(user: UpsertUser): Promise<User>;
   getAllUsers(): Promise<User[]>;
+  getDeactivatedUsers(): Promise<User[]>;
   updateUser(id: string, data: Partial<UpsertUser>): Promise<User | undefined>;
-  deleteUser(id: string): Promise<void>;
+  deactivateUser(id: string): Promise<User | undefined>;
+  reactivateUser(id: string): Promise<User | undefined>;
+  deleteUserPermanently(id: string): Promise<void>;
 
   // Patient operations
   createPatient(patient: InsertPatient): Promise<Patient>;
@@ -157,10 +160,13 @@ export interface IStorage {
   createNotification(notification: InsertNotification): Promise<Notification>;
   getNotificationsByUser(userId: string): Promise<Notification[]>;
   markNotificationAsRead(id: string): Promise<void>;
+  markAllNotificationsAsRead(userId: string): Promise<void>;
 
   // Chat Message operations
   createChatMessage(message: InsertChatMessage): Promise<ChatMessage>;
   getChatMessages(userId1: string, userId2: string): Promise<ChatMessage[]>;
+  getConversations(userId: string): Promise<any[]>;
+  markMessagesAsRead(userId: string, otherUserId: string): Promise<void>;
 
   // Admin operations
   getSystemStats(): Promise<{
@@ -204,7 +210,19 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAllUsers(): Promise<User[]> {
-    return await db.select().from(users).orderBy(desc(users.createdAt));
+    return await db
+      .select()
+      .from(users)
+      .where(eq(users.isActive, true))
+      .orderBy(desc(users.createdAt));
+  }
+
+  async getDeactivatedUsers(): Promise<User[]> {
+    return await db
+      .select()
+      .from(users)
+      .where(eq(users.isActive, false))
+      .orderBy(desc(users.deactivatedAt));
   }
 
   async updateUser(
@@ -219,7 +237,34 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async deleteUser(id: string): Promise<void> {
+  async deactivateUser(id: string): Promise<User | undefined> {
+    const [user] = await db
+      .update(users)
+      .set({
+        isActive: false,
+        deactivatedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, id))
+      .returning();
+    return user;
+  }
+
+  async reactivateUser(id: string): Promise<User | undefined> {
+    const [user] = await db
+      .update(users)
+      .set({
+        isActive: true,
+        deactivatedAt: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, id))
+      .returning();
+    return user;
+  }
+
+  // Keep the hard delete method for future use if needed (admin only)
+  async deleteUserPermanently(id: string): Promise<void> {
     // Get patient and doctor records BEFORE deleting them (for cascade deletion)
     const patientRecords = await db
       .select()
@@ -230,40 +275,114 @@ export class DatabaseStorage implements IStorage {
       .from(doctors)
       .where(eq(doctors.userId, id));
 
-    // Delete appointments where user is a patient
+    // Delete data for patients - following proper foreign key order
     if (patientRecords.length > 0) {
-      await db
-        .delete(appointments)
-        .where(eq(appointments.patientId, patientRecords[0].id));
-      // Delete medical records for this patient
-      await db
-        .delete(medicalRecords)
-        .where(eq(medicalRecords.patientId, patientRecords[0].id));
+      const patientId = patientRecords[0].id;
+
+      // Get all bills for this patient to delete their dependencies
+      const patientBills = await db
+        .select()
+        .from(bills)
+        .where(eq(bills.patientId, patientId));
+
+      // Delete payments and bill items for each bill
+      for (const bill of patientBills) {
+        // Delete payments for this bill
+        await db.delete(payments).where(eq(payments.billId, bill.id));
+
+        // Delete bill items for this bill
+        await db.delete(billItems).where(eq(billItems.billId, bill.id));
+      }
+
+      // Delete bills for this patient (now safe after payments and bill items deleted)
+      await db.delete(bills).where(eq(bills.patientId, patientId));
+
+      // Get all prescriptions for this patient to delete their items
+      const patientPrescriptions = await db
+        .select()
+        .from(prescriptions)
+        .where(eq(prescriptions.patientId, patientId));
+
+      // Delete prescription items for each prescription
+      for (const prescription of patientPrescriptions) {
+        await db
+          .delete(prescriptionItems)
+          .where(eq(prescriptionItems.prescriptionId, prescription.id));
+      }
+
       // Delete prescriptions for this patient
       await db
         .delete(prescriptions)
-        .where(eq(prescriptions.patientId, patientRecords[0].id));
-      // Delete lab tests for this patient
-      await db
-        .delete(labTests)
-        .where(eq(labTests.patientId, patientRecords[0].id));
-      // Delete bills for this patient
-      await db.delete(bills).where(eq(bills.patientId, patientRecords[0].id));
-    }
+        .where(eq(prescriptions.patientId, patientId));
 
-    // Delete appointments where user is a doctor
-    if (doctorRecords.length > 0) {
-      await db
-        .delete(appointments)
-        .where(eq(appointments.doctorId, doctorRecords[0].id));
-      // Delete medical records created by this doctor
+      // Delete medical records for this patient (now safe after prescriptions deleted)
       await db
         .delete(medicalRecords)
-        .where(eq(medicalRecords.doctorId, doctorRecords[0].id));
+        .where(eq(medicalRecords.patientId, patientId));
+
+      // Delete lab tests for this patient
+      await db.delete(labTests).where(eq(labTests.patientId, patientId));
+
+      // Delete appointments for this patient (now safe after bills deleted)
+      await db
+        .delete(appointments)
+        .where(eq(appointments.patientId, patientId));
+    }
+
+    // Delete data for doctors - following proper foreign key order
+    if (doctorRecords.length > 0) {
+      const doctorId = doctorRecords[0].id;
+
+      // Get all appointments with this doctor to delete their bills
+      const doctorAppointments = await db
+        .select()
+        .from(appointments)
+        .where(eq(appointments.doctorId, doctorId));
+
+      // Delete bills, payments, and bill items for each appointment
+      for (const appointment of doctorAppointments) {
+        const appointmentBills = await db
+          .select()
+          .from(bills)
+          .where(eq(bills.appointmentId, appointment.id));
+
+        for (const bill of appointmentBills) {
+          // Delete payments for this bill
+          await db.delete(payments).where(eq(payments.billId, bill.id));
+
+          // Delete bill items for this bill
+          await db.delete(billItems).where(eq(billItems.billId, bill.id));
+
+          // Delete the bill
+          await db.delete(bills).where(eq(bills.id, bill.id));
+        }
+      }
+
+      // Get all prescriptions by this doctor to delete their items
+      const doctorPrescriptions = await db
+        .select()
+        .from(prescriptions)
+        .where(eq(prescriptions.doctorId, doctorId));
+
+      // Delete prescription items for each prescription
+      for (const prescription of doctorPrescriptions) {
+        await db
+          .delete(prescriptionItems)
+          .where(eq(prescriptionItems.prescriptionId, prescription.id));
+      }
+
       // Delete prescriptions created by this doctor
       await db
         .delete(prescriptions)
-        .where(eq(prescriptions.doctorId, doctorRecords[0].id));
+        .where(eq(prescriptions.doctorId, doctorId));
+
+      // Delete medical records created by this doctor (now safe after prescriptions deleted)
+      await db
+        .delete(medicalRecords)
+        .where(eq(medicalRecords.doctorId, doctorId));
+
+      // Delete appointments with this doctor (now safe after bills deleted)
+      await db.delete(appointments).where(eq(appointments.doctorId, doctorId));
     }
 
     // Delete related records
@@ -281,7 +400,7 @@ export class DatabaseStorage implements IStorage {
     // Delete chat messages sent by this user
     await db.delete(chatMessages).where(eq(chatMessages.senderId, id));
 
-    // Delete chat messages received by this user
+    // Delete chat messages received by this user (separate query to avoid SQL syntax error)
     await db.delete(chatMessages).where(eq(chatMessages.receiverId, id));
 
     // Finally, delete the user
@@ -353,9 +472,15 @@ export class DatabaseStorage implements IStorage {
     id: string,
     data: Partial<InsertPatient>
   ): Promise<Patient | undefined> {
+    // Convert dateOfBirth string to Date if present
+    const updateData: any = { ...data, updatedAt: new Date() };
+    if (updateData.dateOfBirth && typeof updateData.dateOfBirth === "string") {
+      updateData.dateOfBirth = new Date(updateData.dateOfBirth);
+    }
+
     const [patient] = await db
       .update(patients)
-      .set({ ...data, updatedAt: new Date() })
+      .set(updateData)
       .where(eq(patients.id, id))
       .returning();
     return patient;
@@ -768,6 +893,10 @@ export class DatabaseStorage implements IStorage {
     return payment;
   }
 
+  async getAllPayments(): Promise<Payment[]> {
+    return await db.select().from(payments).orderBy(desc(payments.paymentDate));
+  }
+
   // ============================================================================
   // NOTIFICATION OPERATIONS
   // ============================================================================
@@ -797,6 +926,13 @@ export class DatabaseStorage implements IStorage {
       .where(eq(notifications.id, id));
   }
 
+  async markAllNotificationsAsRead(userId: string): Promise<void> {
+    await db
+      .update(notifications)
+      .set({ isRead: true })
+      .where(eq(notifications.recipientId, userId));
+  }
+
   // ============================================================================
   // CHAT MESSAGE OPERATIONS
   // ============================================================================
@@ -815,16 +951,138 @@ export class DatabaseStorage implements IStorage {
     userId1: string,
     userId2: string
   ): Promise<ChatMessage[]> {
+    // Fetch messages in BOTH directions
     return await db
       .select()
       .from(chatMessages)
       .where(
-        and(
-          eq(chatMessages.senderId, userId1),
-          eq(chatMessages.receiverId, userId2)
+        or(
+          and(
+            eq(chatMessages.senderId, userId1),
+            eq(chatMessages.receiverId, userId2)
+          ),
+          and(
+            eq(chatMessages.senderId, userId2),
+            eq(chatMessages.receiverId, userId1)
+          )
         )
       )
       .orderBy(chatMessages.createdAt);
+  }
+
+  async getConversations(userId: string): Promise<any[]> {
+    try {
+      // Get all messages involving the current user with user details
+      const allMessages = await db
+        .select({
+          id: chatMessages.id,
+          senderId: chatMessages.senderId,
+          receiverId: chatMessages.receiverId,
+          message: chatMessages.message,
+          isRead: chatMessages.isRead,
+          createdAt: chatMessages.createdAt,
+        })
+        .from(chatMessages)
+        .where(
+          or(
+            eq(chatMessages.senderId, userId),
+            eq(chatMessages.receiverId, userId)
+          )
+        )
+        .orderBy(desc(chatMessages.createdAt));
+
+      // Get all unique user IDs involved in conversations
+      const userIds = new Set<string>();
+      allMessages.forEach((msg) => {
+        if (msg.senderId !== userId) userIds.add(msg.senderId);
+        if (msg.receiverId !== userId) userIds.add(msg.receiverId);
+      });
+
+      // If there are no conversation partners, return empty list early
+      if (userIds.size === 0) return [];
+
+      // Fetch user details for all conversation partners using inArray
+      const userIdsArray = Array.from(userIds);
+      console.log("Fetching users for IDs:", userIdsArray);
+
+      const conversationUsers = await db
+        .select()
+        .from(users)
+        .where(inArray(users.id, userIdsArray));
+
+      // Create user lookup map
+      const userMap = new Map(conversationUsers.map((u) => [u.id, u]));
+
+      // Build conversation list
+      const conversationMap = new Map<string, any>();
+
+      for (const msg of allMessages) {
+        const otherUserId =
+          msg.senderId === userId ? msg.receiverId : msg.senderId;
+
+        if (!conversationMap.has(otherUserId)) {
+          const otherUser = userMap.get(otherUserId);
+          if (!otherUser) continue;
+
+          conversationMap.set(otherUserId, {
+            id: otherUserId,
+            name: otherUser.fullName || otherUser.username,
+            role: otherUser.role,
+            lastMessage: msg.message,
+            timestamp: msg.createdAt,
+            unread: 0,
+          });
+        }
+
+        // Count unread messages (messages sent TO current user that are unread)
+        if (msg.receiverId === userId && !msg.isRead) {
+          conversationMap.get(otherUserId)!.unread += 1;
+        }
+      }
+
+      return Array.from(conversationMap.values());
+    } catch (err) {
+      console.error("getConversations error for userId=", userId, err);
+      throw err;
+    }
+  }
+
+  async markMessagesAsRead(userId: string, otherUserId: string): Promise<void> {
+    await db
+      .update(chatMessages)
+      .set({ isRead: true })
+      .where(
+        and(
+          eq(chatMessages.senderId, otherUserId),
+          eq(chatMessages.receiverId, userId),
+          eq(chatMessages.isRead, false)
+        )
+      );
+  }
+
+  async getChatMessageById(
+    messageId: string
+  ): Promise<ChatMessage | undefined> {
+    const [message] = await db
+      .select()
+      .from(chatMessages)
+      .where(eq(chatMessages.id, messageId))
+      .limit(1);
+    return message;
+  }
+
+  async deleteChatMessage(messageId: string): Promise<void> {
+    await db.delete(chatMessages).where(eq(chatMessages.id, messageId));
+  }
+
+  async updateChatMessage(
+    messageId: string,
+    newMessage: string
+  ): Promise<void> {
+    await db
+      .update(chatMessages)
+      .set({ message: newMessage })
+      .where(eq(chatMessages.id, messageId));
   }
 
   // ============================================================================

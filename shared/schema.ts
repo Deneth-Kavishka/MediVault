@@ -42,6 +42,8 @@ export const users = pgTable("users", {
   lastName: varchar("last_name"),
   profileImageUrl: varchar("profile_image_url"),
   role: varchar("role").notNull(), // 'patient' | 'doctor' | 'pharmacist' | 'lab_technician' | 'admin'
+  isActive: boolean("is_active").default(true).notNull(), // Soft delete - false means deactivated
+  deactivatedAt: timestamp("deactivated_at"), // When user was deactivated
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

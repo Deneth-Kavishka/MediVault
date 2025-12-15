@@ -54,6 +54,14 @@ export function setupAuth(app: Express) {
           return done(null, false, { message: "Incorrect username." });
         }
 
+        // Check if user is active
+        if (!user.isActive) {
+          return done(null, false, {
+            message:
+              "This account has been deactivated. Please contact an administrator.",
+          });
+        }
+
         // Verify password
         const isValid = await bcrypt.compare(password, user.password);
         if (!isValid) {
