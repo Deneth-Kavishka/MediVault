@@ -127,6 +127,43 @@ export const labTechnicians = pgTable("lab_technicians", {
 });
 
 // ============================================================================
+// DOCTOR AVAILABILITY TABLE
+// ============================================================================
+
+export const doctorAvailability = pgTable("doctor_availability", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  doctorId: varchar("doctor_id")
+    .notNull()
+    .references(() => doctors.id),
+  locationName: varchar("location_name").notNull(), // Hospital/Clinic name
+  locationAddress: text("location_address").notNull(),
+  locationCity: varchar("location_city").notNull(),
+  locationLatitude: decimal("location_latitude", { precision: 10, scale: 7 }), // For Google Maps
+  locationLongitude: decimal("location_longitude", { precision: 10, scale: 7 }), // For Google Maps
+  placeId: varchar("place_id"), // Google Maps Place ID for reference
+  availableDate: timestamp("available_date").notNull(), // Specific date doctor is available
+  startTime: varchar("start_time").notNull(), // '09:00'
+  endTime: varchar("end_time").notNull(), // '17:00'
+  maxPatients: integer("max_patients").notNull().default(20), // Daily appointment limit
+  bookedCount: integer("booked_count").notNull().default(0), // Number of appointments booked
+  hospitalType: varchar("hospital_type").notNull().default("government"), // 'government' | 'private'
+  consultationFee: decimal("consultation_fee", {
+    precision: 10,
+    scale: 2,
+  }).default("0.00"), // Fee for private hospitals only
+  isActive: boolean("is_active").default(true).notNull(),
+  status: varchar("status").notNull().default("active"), // 'active' | 'inactive' | 'finished'
+  reactivationRequested: boolean("reactivation_requested")
+    .default(false)
+    .notNull(),
+  reactivationRequestedAt: timestamp("reactivation_requested_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ============================================================================
 // APPOINTMENT TABLE
 // ============================================================================
 
@@ -140,10 +177,28 @@ export const appointments = pgTable("appointments", {
   doctorId: varchar("doctor_id")
     .notNull()
     .references(() => doctors.id),
+  availabilityId: varchar("availability_id").references(
+    () => doctorAvailability.id
+  ), // Link to specific availability
   appointmentDate: timestamp("appointment_date").notNull(),
-  status: varchar("status").notNull(), // 'pending' | 'confirmed' | 'completed' | 'cancelled'
+  appointmentTime: varchar("appointment_time"), // Approved time slot (e.g., "10:00 AM")
+  status: varchar("status").notNull(), // 'pending' | 'confirmed' | 'completed' | 'cancelled' | 'cancellation_requested'
   reason: text("reason"),
   notes: text("notes"),
+  cancelledAt: timestamp("cancelled_at"), // Track when appointment was cancelled
+  cancelledBy: varchar("cancelled_by"), // Who cancelled: 'patient', 'doctor', 'admin'
+  cancellationReason: text("cancellation_reason"), // Reason for cancellation
+  cancellationRequestedBy: varchar("cancellation_requested_by"), // User ID who requested cancellation
+  cancellationRequestedAt: timestamp("cancellation_requested_at"), // When cancellation was requested
+  cancellationRejectedReason: text("cancellation_rejected_reason"), // Admin's reason for rejecting cancellation
+  approvedAt: timestamp("approved_at"), // When appointment was approved
+  approvedBy: varchar("approved_by"), // User ID who approved (doctor/admin)
+  completedAt: timestamp("completed_at"), // When appointment was marked as completed
+  completedBy: varchar("completed_by"), // User ID who marked as completed (doctor/admin)
+  actualVisitTime: varchar("actual_visit_time"), // Actual time patient was seen (HH:MM format)
+  completionNotes: text("completion_notes"), // Doctor's notes from the visit
+  prescriptionNeeded: boolean("prescription_needed").default(false), // Whether prescription is required
+  labTestsNeeded: boolean("lab_tests_needed").default(false), // Whether lab tests are required
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -185,11 +240,13 @@ export const prescriptions = pgTable("prescriptions", {
   doctorId: varchar("doctor_id")
     .notNull()
     .references(() => doctors.id),
+  appointmentId: varchar("appointment_id").references(() => appointments.id), // Link to appointment
   medicalRecordId: varchar("medical_record_id").references(
     () => medicalRecords.id
   ),
   dateIssued: timestamp("date_issued").defaultNow(),
   expiryDate: timestamp("expiry_date"),
+  validityDays: integer("validity_days").default(90), // Number of days prescription is valid
   qrCode: text("qr_code"), // QR code data for verification
   status: varchar("status").notNull(), // 'active' | 'dispensed' | 'expired'
   notes: text("notes"),
@@ -232,9 +289,8 @@ export const prescriptionItems = pgTable("prescription_items", {
   prescriptionId: varchar("prescription_id")
     .notNull()
     .references(() => prescriptions.id),
-  medicineId: varchar("medicine_id")
-    .notNull()
-    .references(() => medicines.id),
+  medicineId: varchar("medicine_id").references(() => medicines.id), // Optional - can link to inventory
+  medicineName: varchar("medicine_name").notNull(), // Direct medicine name for prescriptions
   dosage: varchar("dosage").notNull(),
   frequency: varchar("frequency").notNull(),
   duration: varchar("duration").notNull(),
@@ -642,6 +698,9 @@ export type Pharmacist = typeof pharmacists.$inferSelect;
 
 export type InsertLabTechnician = z.infer<typeof insertLabTechnicianSchema>;
 export type LabTechnician = typeof labTechnicians.$inferSelect;
+
+export type InsertDoctorAvailability = typeof doctorAvailability.$inferInsert;
+export type DoctorAvailability = typeof doctorAvailability.$inferSelect;
 
 export type InsertAppointment = z.infer<typeof insertAppointmentSchema>;
 export type Appointment = typeof appointments.$inferSelect;

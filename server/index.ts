@@ -3,6 +3,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { getSession } from "./localAuth";
+import { DatabaseStorage } from "./storage";
 
 const app = express();
 
@@ -91,4 +92,30 @@ app.use((req, res, next) => {
       log(`serving on port ${port}`);
     }
   );
+
+  // Setup automatic cleanup of cancelled appointments older than 24 hours
+  // Run every hour
+  const storage = new DatabaseStorage();
+  const cleanupInterval = setInterval(async () => {
+    try {
+      const deletedCount =
+        await storage.deleteCancelledAppointmentsOlderThan24Hours();
+      if (deletedCount > 0) {
+        log(
+          `Cleaned up ${deletedCount} cancelled appointment(s) older than 24 hours`
+        );
+      }
+    } catch (error) {
+      console.error("Error during appointment cleanup:", error);
+    }
+  }, 60 * 60 * 1000); // Run every hour
+
+  // Cleanup on shutdown
+  process.on("SIGTERM", () => {
+    clearInterval(cleanupInterval);
+  });
+  process.on("SIGINT", () => {
+    clearInterval(cleanupInterval);
+    process.exit(0);
+  });
 })();

@@ -19,7 +19,10 @@ import MedicalRecords from "@/pages/medical-records";
 import Notifications from "@/pages/notifications";
 import Messages from "@/pages/messages";
 import AdminUsers from "@/pages/admin-users";
+import AdminDoctorAvailability from "@/pages/admin-doctor-availability";
 import AdminPatients from "@/pages/admin-patients";
+import DoctorAvailability from "@/pages/doctor-availability";
+import FindDoctors from "@/pages/find-doctors";
 import AdminDoctors from "@/pages/admin-doctors";
 import AdminAppointments from "@/pages/admin-appointments";
 import ReportsPage from "@/pages/reports";
@@ -106,6 +109,12 @@ function Router() {
       <Route path="/scanner" component={Dashboard} />
       <Route path="/test-results" component={Dashboard} />
       <Route path="/admin/users" component={AdminUsers} />
+      <Route
+        path="/admin/doctor-availability"
+        component={AdminDoctorAvailability}
+      />
+      <Route path="/doctor/availability" component={DoctorAvailability} />
+      <Route path="/find-doctors" component={FindDoctors} />
       <Route path="/users" component={Dashboard} />
       <Route path="/audit-logs" component={Dashboard} />
       <Route path="/reports" component={ReportsPage} />

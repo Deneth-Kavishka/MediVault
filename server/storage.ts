@@ -5,6 +5,7 @@ import {
   doctors,
   pharmacists,
   labTechnicians,
+  doctorAvailability,
   appointments,
   medicalRecords,
   prescriptions,
@@ -27,6 +28,8 @@ import {
   type InsertPharmacist,
   type LabTechnician,
   type InsertLabTechnician,
+  type DoctorAvailability,
+  type InsertDoctorAvailability,
   type Appointment,
   type InsertAppointment,
   type MedicalRecord,
@@ -51,7 +54,8 @@ import {
   type InsertChatMessage,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, or, desc, sql, inArray } from "drizzle-orm";
+import { eq, and, or, desc, sql, inArray, lt } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 export interface IStorage {
   // User operations
@@ -103,6 +107,22 @@ export interface IStorage {
     data: Partial<InsertLabTechnician>
   ): Promise<LabTechnician | undefined>;
 
+  // Doctor Availability operations
+  createDoctorAvailability(
+    availability: InsertDoctorAvailability
+  ): Promise<DoctorAvailability>;
+  getDoctorAvailability(id: string): Promise<DoctorAvailability | undefined>;
+  getAllDoctorAvailability(): Promise<DoctorAvailability[]>;
+  getDoctorAvailabilityByDoctor(
+    doctorId: string
+  ): Promise<DoctorAvailability[]>;
+  getDoctorAvailabilityByLocation(city: string): Promise<DoctorAvailability[]>;
+  updateDoctorAvailability(
+    id: string,
+    data: Partial<InsertDoctorAvailability>
+  ): Promise<DoctorAvailability | undefined>;
+  deleteDoctorAvailability(id: string): Promise<void>;
+
   // Appointment operations
   createAppointment(appointment: InsertAppointment): Promise<Appointment>;
   getAppointment(id: string): Promise<Appointment | undefined>;
@@ -113,6 +133,8 @@ export interface IStorage {
     id: string,
     status: string
   ): Promise<Appointment | undefined>;
+  deleteAppointment(id: string): Promise<boolean>;
+  deleteCancelledAppointmentsOlderThan24Hours(): Promise<number>;
 
   // Medical Record operations
   createMedicalRecord(record: InsertMedicalRecord): Promise<MedicalRecord>;
@@ -635,6 +657,83 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============================================================================
+  // DOCTOR AVAILABILITY OPERATIONS
+  // ============================================================================
+
+  async createDoctorAvailability(
+    availabilityData: InsertDoctorAvailability
+  ): Promise<DoctorAvailability> {
+    const [availability] = await db
+      .insert(doctorAvailability)
+      .values(availabilityData)
+      .returning();
+    return availability;
+  }
+
+  async getDoctorAvailability(
+    id: string
+  ): Promise<DoctorAvailability | undefined> {
+    const [availability] = await db
+      .select()
+      .from(doctorAvailability)
+      .where(eq(doctorAvailability.id, id));
+    return availability;
+  }
+
+  async getAllDoctorAvailability(): Promise<DoctorAvailability[]> {
+    return await db
+      .select()
+      .from(doctorAvailability)
+      .orderBy(desc(doctorAvailability.createdAt));
+  }
+
+  async getDoctorAvailabilityByDoctor(
+    doctorId: string
+  ): Promise<DoctorAvailability[]> {
+    return await db
+      .select()
+      .from(doctorAvailability)
+      .where(
+        and(
+          eq(doctorAvailability.doctorId, doctorId),
+          eq(doctorAvailability.isActive, true)
+        )
+      )
+      .orderBy(doctorAvailability.availableDate);
+  }
+
+  async getDoctorAvailabilityByLocation(
+    city: string
+  ): Promise<DoctorAvailability[]> {
+    return await db
+      .select()
+      .from(doctorAvailability)
+      .where(
+        and(
+          eq(doctorAvailability.locationCity, city),
+          eq(doctorAvailability.isActive, true)
+        )
+      )
+      .orderBy(desc(doctorAvailability.createdAt));
+  }
+
+  async updateDoctorAvailability(
+    id: string,
+    data: Partial<InsertDoctorAvailability>
+  ): Promise<DoctorAvailability | undefined> {
+    const [availability] = await db
+      .update(doctorAvailability)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(doctorAvailability.id, id))
+      .returning();
+    return availability;
+  }
+
+  async deleteDoctorAvailability(id: string): Promise<void> {
+    await db.delete(doctorAvailability).where(eq(doctorAvailability.id, id));
+  }
+
+  // ============================================================================
   // APPOINTMENT OPERATIONS
   // ============================================================================
 
@@ -645,6 +744,18 @@ export class DatabaseStorage implements IStorage {
       .insert(appointments)
       .values(appointmentData)
       .returning();
+
+    // Increment booked count if availabilityId is provided
+    if (appointmentData.availabilityId) {
+      await db
+        .update(doctorAvailability)
+        .set({
+          bookedCount: sql`${doctorAvailability.bookedCount} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(doctorAvailability.id, appointmentData.availabilityId));
+    }
+
     return appointment;
   }
 
@@ -656,39 +767,359 @@ export class DatabaseStorage implements IStorage {
     return appointment;
   }
 
-  async getAllAppointments(): Promise<Appointment[]> {
-    return await db
-      .select()
+  async getAllAppointments(): Promise<any[]> {
+    // Create table aliases for users table (needed twice - for patient and doctor)
+    const patientUser = alias(users, "patient_user");
+    const doctorUser = alias(users, "doctor_user");
+
+    const results = await db
+      .select({
+        id: appointments.id,
+        patientId: appointments.patientId,
+        doctorId: appointments.doctorId,
+        availabilityId: appointments.availabilityId,
+        appointmentDate: appointments.appointmentDate,
+        appointmentTime: appointments.appointmentTime,
+        status: appointments.status,
+        reason: appointments.reason,
+        notes: appointments.notes,
+        cancelledAt: appointments.cancelledAt,
+        cancellationReason: appointments.cancellationReason,
+        cancellationRequestedBy: appointments.cancellationRequestedBy,
+        cancellationRequestedAt: appointments.cancellationRequestedAt,
+        cancellationRejectedReason: appointments.cancellationRejectedReason,
+        approvedAt: appointments.approvedAt,
+        approvedBy: appointments.approvedBy,
+        completedAt: appointments.completedAt,
+        completedBy: appointments.completedBy,
+        createdAt: appointments.createdAt,
+        updatedAt: appointments.updatedAt,
+        patientFirstName: patientUser.firstName,
+        patientLastName: patientUser.lastName,
+        patientRfid: patients.rfid,
+        doctorFirstName: doctorUser.firstName,
+        doctorLastName: doctorUser.lastName,
+        doctorSpecialization: doctors.specialization,
+        doctorLicenseNumber: doctors.licenseNumber,
+      })
       .from(appointments)
+      .leftJoin(patients, eq(appointments.patientId, patients.id))
+      .leftJoin(patientUser, eq(patients.userId, patientUser.id))
+      .leftJoin(doctors, eq(appointments.doctorId, doctors.id))
+      .leftJoin(doctorUser, eq(doctors.userId, doctorUser.id))
       .orderBy(desc(appointments.appointmentDate));
+
+    return results.map((row: any) => ({
+      id: row.id,
+      patientId: row.patientId,
+      doctorId: row.doctorId,
+      availabilityId: row.availabilityId,
+      appointmentDate: row.appointmentDate,
+      appointmentTime: row.appointmentTime,
+      status: row.status,
+      reason: row.reason,
+      notes: row.notes,
+      cancelledAt: row.cancelledAt,
+      cancellationReason: row.cancellationReason,
+      cancellationRequestedBy: row.cancellationRequestedBy,
+      cancellationRequestedAt: row.cancellationRequestedAt,
+      cancellationRejectedReason: row.cancellationRejectedReason,
+      approvedAt: row.approvedAt,
+      approvedBy: row.approvedBy,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      patient: {
+        rfid: row.patientRfid || "",
+        user: {
+          firstName: row.patientFirstName || "",
+          lastName: row.patientLastName || "",
+        },
+      },
+      doctor: {
+        licenseNumber: row.doctorLicenseNumber || "",
+        specialization: row.doctorSpecialization || "General",
+        user: {
+          firstName: row.doctorFirstName || "",
+          lastName: row.doctorLastName || "",
+        },
+      },
+      // Also include flat fields for backward compatibility
+      patientName:
+        row.patientFirstName && row.patientLastName
+          ? `${row.patientFirstName} ${row.patientLastName}`
+          : "Unknown Patient",
+      doctorName:
+        row.doctorFirstName && row.doctorLastName
+          ? `Dr. ${row.doctorFirstName} ${row.doctorLastName}`
+          : "Unknown Doctor",
+      specialization: row.doctorSpecialization || "General",
+      specialty: row.doctorSpecialization || "General",
+    }));
   }
 
-  async getAppointmentsByPatient(patientId: string): Promise<Appointment[]> {
-    return await db
-      .select()
+  async getAppointmentsByPatient(patientId: string): Promise<any[]> {
+    const patientUser = alias(users, "patient_user");
+    const doctorUser = alias(users, "doctor_user");
+
+    const results = await db
+      .select({
+        id: appointments.id,
+        patientId: appointments.patientId,
+        doctorId: appointments.doctorId,
+        availabilityId: appointments.availabilityId,
+        appointmentDate: appointments.appointmentDate,
+        appointmentTime: appointments.appointmentTime,
+        status: appointments.status,
+        reason: appointments.reason,
+        notes: appointments.notes,
+        cancelledAt: appointments.cancelledAt,
+        cancellationReason: appointments.cancellationReason,
+        cancellationRequestedBy: appointments.cancellationRequestedBy,
+        cancellationRequestedAt: appointments.cancellationRequestedAt,
+        cancellationRejectedReason: appointments.cancellationRejectedReason,
+        approvedAt: appointments.approvedAt,
+        approvedBy: appointments.approvedBy,
+        completedAt: appointments.completedAt,
+        completedBy: appointments.completedBy,
+        createdAt: appointments.createdAt,
+        updatedAt: appointments.updatedAt,
+        patientFirstName: patientUser.firstName,
+        patientLastName: patientUser.lastName,
+        patientRfid: patients.rfid,
+        doctorFirstName: doctorUser.firstName,
+        doctorLastName: doctorUser.lastName,
+        doctorSpecialization: doctors.specialization,
+        doctorLicenseNumber: doctors.licenseNumber,
+      })
       .from(appointments)
+      .leftJoin(patients, eq(appointments.patientId, patients.id))
+      .leftJoin(patientUser, eq(patients.userId, patientUser.id))
+      .leftJoin(doctors, eq(appointments.doctorId, doctors.id))
+      .leftJoin(doctorUser, eq(doctors.userId, doctorUser.id))
       .where(eq(appointments.patientId, patientId))
       .orderBy(desc(appointments.appointmentDate));
+
+    return results.map((row: any) => ({
+      id: row.id,
+      patientId: row.patientId,
+      doctorId: row.doctorId,
+      availabilityId: row.availabilityId,
+      appointmentDate: row.appointmentDate,
+      appointmentTime: row.appointmentTime,
+      status: row.status,
+      reason: row.reason,
+      notes: row.notes,
+      cancelledAt: row.cancelledAt,
+      cancellationReason: row.cancellationReason,
+      cancellationRequestedBy: row.cancellationRequestedBy,
+      cancellationRequestedAt: row.cancellationRequestedAt,
+      cancellationRejectedReason: row.cancellationRejectedReason,
+      approvedAt: row.approvedAt,
+      approvedBy: row.approvedBy,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      patient: {
+        rfid: row.patientRfid || "",
+        user: {
+          firstName: row.patientFirstName || "",
+          lastName: row.patientLastName || "",
+        },
+      },
+      doctor: {
+        licenseNumber: row.doctorLicenseNumber || "",
+        specialization: row.doctorSpecialization || "General",
+        user: {
+          firstName: row.doctorFirstName || "",
+          lastName: row.doctorLastName || "",
+        },
+      },
+      // Also include flat fields for backward compatibility
+      patientName:
+        row.patientFirstName && row.patientLastName
+          ? `${row.patientFirstName} ${row.patientLastName}`
+          : "Unknown Patient",
+      doctorName:
+        row.doctorFirstName && row.doctorLastName
+          ? `Dr. ${row.doctorFirstName} ${row.doctorLastName}`
+          : "Unknown Doctor",
+      specialization: row.doctorSpecialization || "General",
+      specialty: row.doctorSpecialization || "General",
+    }));
   }
 
-  async getAppointmentsByDoctor(doctorId: string): Promise<Appointment[]> {
-    return await db
-      .select()
+  async getAppointmentsByDoctor(doctorId: string): Promise<any[]> {
+    const patientUser = alias(users, "patient_user");
+    const doctorUser = alias(users, "doctor_user");
+
+    const results = await db
+      .select({
+        id: appointments.id,
+        patientId: appointments.patientId,
+        doctorId: appointments.doctorId,
+        availabilityId: appointments.availabilityId,
+        appointmentDate: appointments.appointmentDate,
+        appointmentTime: appointments.appointmentTime,
+        status: appointments.status,
+        reason: appointments.reason,
+        notes: appointments.notes,
+        cancelledAt: appointments.cancelledAt,
+        cancellationReason: appointments.cancellationReason,
+        cancellationRequestedBy: appointments.cancellationRequestedBy,
+        cancellationRequestedAt: appointments.cancellationRequestedAt,
+        cancellationRejectedReason: appointments.cancellationRejectedReason,
+        approvedAt: appointments.approvedAt,
+        approvedBy: appointments.approvedBy,
+        completedAt: appointments.completedAt,
+        completedBy: appointments.completedBy,
+        createdAt: appointments.createdAt,
+        updatedAt: appointments.updatedAt,
+        patientFirstName: patientUser.firstName,
+        patientLastName: patientUser.lastName,
+        patientRfid: patients.rfid,
+        doctorFirstName: doctorUser.firstName,
+        doctorLastName: doctorUser.lastName,
+        doctorSpecialization: doctors.specialization,
+        doctorLicenseNumber: doctors.licenseNumber,
+      })
       .from(appointments)
+      .leftJoin(patients, eq(appointments.patientId, patients.id))
+      .leftJoin(patientUser, eq(patients.userId, patientUser.id))
+      .leftJoin(doctors, eq(appointments.doctorId, doctors.id))
+      .leftJoin(doctorUser, eq(doctors.userId, doctorUser.id))
       .where(eq(appointments.doctorId, doctorId))
       .orderBy(desc(appointments.appointmentDate));
+
+    return results.map((row: any) => ({
+      id: row.id,
+      patientId: row.patientId,
+      doctorId: row.doctorId,
+      availabilityId: row.availabilityId,
+      appointmentDate: row.appointmentDate,
+      appointmentTime: row.appointmentTime,
+      status: row.status,
+      reason: row.reason,
+      notes: row.notes,
+      cancelledAt: row.cancelledAt,
+      cancellationReason: row.cancellationReason,
+      cancellationRequestedBy: row.cancellationRequestedBy,
+      cancellationRequestedAt: row.cancellationRequestedAt,
+      cancellationRejectedReason: row.cancellationRejectedReason,
+      approvedAt: row.approvedAt,
+      approvedBy: row.approvedBy,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      patient: {
+        rfid: row.patientRfid || "",
+        user: {
+          firstName: row.patientFirstName || "",
+          lastName: row.patientLastName || "",
+        },
+      },
+      doctor: {
+        licenseNumber: row.doctorLicenseNumber || "",
+        specialization: row.doctorSpecialization || "General",
+        user: {
+          firstName: row.doctorFirstName || "",
+          lastName: row.doctorLastName || "",
+        },
+      },
+      // Also include flat fields for backward compatibility
+      patientName:
+        row.patientFirstName && row.patientLastName
+          ? `${row.patientFirstName} ${row.patientLastName}`
+          : "Unknown Patient",
+      doctorName:
+        row.doctorFirstName && row.doctorLastName
+          ? `Dr. ${row.doctorFirstName} ${row.doctorLastName}`
+          : "Unknown Doctor",
+      specialization: row.doctorSpecialization || "General",
+      specialty: row.doctorSpecialization || "General",
+    }));
   }
 
   async updateAppointmentStatus(
     id: string,
     status: string
   ): Promise<Appointment | undefined> {
+    // Get the current appointment to check previous status
+    const [currentAppointment] = await db
+      .select()
+      .from(appointments)
+      .where(eq(appointments.id, id));
+
+    const updateData: any = { status, updatedAt: new Date() };
+
+    // Set cancelledAt timestamp when cancelling
+    if (status === "cancelled") {
+      updateData.cancelledAt = new Date();
+    } else if (
+      currentAppointment?.status === "cancelled" &&
+      status !== "cancelled"
+    ) {
+      // Clear cancelledAt when un-cancelling
+      updateData.cancelledAt = null;
+    }
+
     const [appointment] = await db
       .update(appointments)
-      .set({ status, updatedAt: new Date() })
+      .set(updateData)
       .where(eq(appointments.id, id))
       .returning();
+
+    // Decrement booked count when appointment is cancelled
+    if (currentAppointment && appointment.availabilityId) {
+      const wasActive = currentAppointment.status !== "cancelled";
+      const nowCancelled = status === "cancelled";
+
+      if (wasActive && nowCancelled) {
+        // Decrement count when cancelling
+        await db
+          .update(doctorAvailability)
+          .set({
+            bookedCount: sql`GREATEST(0, ${doctorAvailability.bookedCount} - 1)`,
+            updatedAt: new Date(),
+          })
+          .where(eq(doctorAvailability.id, appointment.availabilityId));
+      } else if (!wasActive && !nowCancelled) {
+        // Increment count when un-cancelling
+        await db
+          .update(doctorAvailability)
+          .set({
+            bookedCount: sql`${doctorAvailability.bookedCount} + 1`,
+            updatedAt: new Date(),
+          })
+          .where(eq(doctorAvailability.id, appointment.availabilityId));
+      }
+    }
+
     return appointment;
+  }
+
+  async deleteAppointment(id: string): Promise<boolean> {
+    const [deleted] = await db
+      .delete(appointments)
+      .where(eq(appointments.id, id))
+      .returning();
+    return !!deleted;
+  }
+
+  async deleteCancelledAppointmentsOlderThan24Hours(): Promise<number> {
+    // Calculate timestamp for 24 hours ago
+    const twentyFourHoursAgo = new Date();
+    twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+
+    // Delete cancelled appointments older than 24 hours
+    const deleted = await db
+      .delete(appointments)
+      .where(
+        and(
+          eq(appointments.status, "cancelled"),
+          lt(appointments.cancelledAt, twentyFourHoursAgo)
+        )
+      )
+      .returning();
+
+    return deleted.length;
   }
 
   // ============================================================================

@@ -1,5 +1,6 @@
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
+import { useQuery } from "@tanstack/react-query";
 import {
   Calendar,
   FileText,
@@ -17,6 +18,8 @@ import {
   Shield,
   FileBarChart,
   UsersRound,
+  MapPin,
+  Search,
 } from "lucide-react";
 import {
   Sidebar,
@@ -37,6 +40,16 @@ export function AppSidebar() {
   const [location] = useLocation();
   const { user } = useAuth();
 
+  // Fetch notifications with polling for real-time updates
+  const { data: notifications = [] } = useQuery<any[]>({
+    queryKey: ["/api/notifications"],
+    refetchInterval: 10000, // Refetch every 10 seconds for real-time updates
+    enabled: !!user,
+  });
+
+  // Calculate unread count
+  const unreadCount = notifications.filter((n: any) => !n.isRead).length;
+
   const handleLogout = async () => {
     try {
       await fetch("/api/logout", { method: "POST" });
@@ -53,11 +66,17 @@ export function AppSidebar() {
     const commonItems = [
       { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
       { title: "Messages", url: "/messages", icon: MessageSquare },
-      { title: "Notifications", url: "/notifications", icon: Bell },
+      {
+        title: "Notifications",
+        url: "/notifications",
+        icon: Bell,
+        badge: unreadCount > 0 ? unreadCount : undefined,
+      },
     ];
 
     const roleItems = {
       patient: [
+        { title: "Find Doctors", url: "/find-doctors", icon: Search },
         { title: "Appointments", url: "/appointments", icon: Calendar },
         { title: "Medical Records", url: "/medical-records", icon: FileText },
         { title: "Prescriptions", url: "/prescriptions", icon: Pill },
@@ -65,6 +84,7 @@ export function AppSidebar() {
         { title: "Bills & Payments", url: "/bills", icon: Receipt },
       ],
       doctor: [
+        { title: "My Availability", url: "/doctor/availability", icon: MapPin },
         { title: "Appointments", url: "/appointments", icon: Calendar },
         { title: "Patients", url: "/patients", icon: Users },
         { title: "Medical Records", url: "/medical-records", icon: FileText },
@@ -82,6 +102,11 @@ export function AppSidebar() {
       ],
       admin: [
         { title: "User Management", url: "/admin/users", icon: UsersRound },
+        {
+          title: "Doctor Availability",
+          url: "/admin/doctor-availability",
+          icon: MapPin,
+        },
         { title: "Patients", url: "/patients", icon: Users },
         { title: "Doctors", url: "/doctors", icon: Users },
         { title: "Appointments", url: "/appointments-admin", icon: Calendar },
@@ -130,9 +155,14 @@ export function AppSidebar() {
                       .toLowerCase()
                       .replace(/\s+/g, "-")}`}
                   >
-                    <a href={item.url}>
+                    <a href={item.url} className="flex items-center gap-2">
                       <item.icon className="w-4 h-4" />
                       <span>{item.title}</span>
+                      {item.badge && (
+                        <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-medium text-primary-foreground">
+                          {item.badge > 99 ? "99+" : item.badge}
+                        </span>
+                      )}
                     </a>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

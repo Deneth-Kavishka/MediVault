@@ -32,7 +32,14 @@ import {
   insertPaymentSchema,
   insertNotificationSchema,
   insertChatMessageSchema,
+  appointments,
+  doctorAvailability,
+  labTests as labTestsTable,
+  prescriptions,
+  prescriptionItems,
 } from "@shared/schema";
+import { db } from "./db";
+import { eq, sql } from "drizzle-orm";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
@@ -165,26 +172,405 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============================================================================
+  // DOCTOR AVAILABILITY ROUTES
+  // ============================================================================
+
+  // Create doctor availability
+  app.post(
+    "/api/doctor-availability",
+    isDoctorOrAdmin,
+    async (req: any, res) => {
+      try {
+        console.log("📍 Received availability data:", {
+          ...req.body,
+          availableDate: req.body.availableDate,
+        });
+
+        // Convert availableDate string to Date object
+        const data = {
+          ...req.body,
+          availableDate: new Date(req.body.availableDate),
+          // Set placeId to null if it's empty string
+          placeId: req.body.placeId || null,
+        };
+
+        console.log("📍 Processed data for DB:", {
+          ...data,
+          availableDate: data.availableDate.toISOString(),
+        });
+
+        const availability = await storage.createDoctorAvailability(data);
+        console.log("✅ Availability created successfully:", availability.id);
+        res.status(201).json(availability);
+      } catch (error: any) {
+        console.error("❌ Error creating availability:", error);
+        console.error("❌ Error details:", {
+          message: error.message,
+          code: error.code,
+          detail: error.detail,
+        });
+        res.status(500).json({
+          message: "Failed to create availability",
+          error: error.message,
+        });
+      }
+    }
+  );
+
+  // Get all doctor availability (admin)
+  app.get("/api/doctor-availability", isAuthenticated, async (req, res) => {
+    try {
+      const availability = await storage.getAllDoctorAvailability();
+      res.json(availability);
+    } catch (error) {
+      console.error("Error fetching availability:", error);
+      res.status(500).json({ message: "Failed to fetch availability" });
+    }
+  });
+
+  // Get doctor availability by doctor ID
+  app.get(
+    "/api/doctor-availability/doctor/:doctorId",
+    isAuthenticated,
+    async (req, res) => {
+      try {
+        const availability = await storage.getDoctorAvailabilityByDoctor(
+          req.params.doctorId
+        );
+        res.json(availability);
+      } catch (error) {
+        console.error("Error fetching doctor availability:", error);
+        res
+          .status(500)
+          .json({ message: "Failed to fetch doctor availability" });
+      }
+    }
+  );
+
+  // Get doctor availability by location (for patient search)
+  app.get(
+    "/api/doctor-availability/location/:city",
+    isAuthenticated,
+    async (req, res) => {
+      try {
+        const availability = await storage.getDoctorAvailabilityByLocation(
+          req.params.city
+        );
+        res.json(availability);
+      } catch (error) {
+        console.error("Error fetching availability by location:", error);
+        res.status(500).json({ message: "Failed to fetch availability" });
+      }
+    }
+  );
+
+  // Search doctors by specialization and location
+  app.get(
+    "/api/doctor-availability/search",
+    isAuthenticated,
+    async (req, res) => {
+      try {
+        const { city, specialization } = req.query;
+        let availability = await storage.getAllDoctorAvailability();
+
+        // Filter by city if provided
+        if (city) {
+          availability = availability.filter((a) =>
+            a.locationCity
+              .toLowerCase()
+              .includes((city as string).toLowerCase())
+          );
+        }
+
+        // Join with doctor data to filter by specialization
+        if (specialization) {
+          const availabilityWithDoctors = await Promise.all(
+            availability.map(async (avail) => {
+              const doctor = await storage.getDoctor(avail.doctorId);
+              return { ...avail, doctor };
+            })
+          );
+
+          availability = availabilityWithDoctors
+            .filter((a) =>
+              a.doctor?.specialization
+                ?.toLowerCase()
+                .includes((specialization as string).toLowerCase())
+            )
+            .map(({ doctor, ...avail }) => avail);
+        }
+
+        res.json(availability);
+      } catch (error) {
+        console.error("Error searching availability:", error);
+        res.status(500).json({ message: "Failed to search availability" });
+      }
+    }
+  );
+
+  // Update doctor availability
+  app.patch(
+    "/api/doctor-availability/:id",
+    isDoctorOrAdmin,
+    async (req, res) => {
+      try {
+        // Convert availableDate string to Date object if present
+        const data = req.body.availableDate
+          ? {
+              ...req.body,
+              availableDate: new Date(req.body.availableDate),
+            }
+          : req.body;
+
+        const availability = await storage.updateDoctorAvailability(
+          req.params.id,
+          data
+        );
+        if (!availability) {
+          return res.status(404).json({ message: "Availability not found" });
+        }
+        res.json(availability);
+      } catch (error) {
+        console.error("Error updating availability:", error);
+        res.status(500).json({ message: "Failed to update availability" });
+      }
+    }
+  );
+
+  // Toggle doctor availability active/inactive (Admin only)
+  app.patch(
+    "/api/doctor-availability/:id/toggle",
+    isAdmin,
+    async (req, res) => {
+      try {
+        const { isActive } = req.body;
+
+        if (typeof isActive !== "boolean") {
+          return res
+            .status(400)
+            .json({ message: "isActive must be a boolean" });
+        }
+
+        const status = isActive ? "active" : "inactive";
+
+        const availability = await storage.updateDoctorAvailability(
+          req.params.id,
+          {
+            isActive,
+            status,
+            reactivationRequested: false, // Clear any pending reactivation request
+            reactivationRequestedAt: null,
+            updatedAt: new Date(),
+          }
+        );
+
+        if (!availability) {
+          return res.status(404).json({ message: "Availability not found" });
+        }
+
+        // Notify doctor about status change
+        const doctor = await storage.getDoctor(availability.doctorId);
+        if (doctor) {
+          await storage.createNotification({
+            recipientId: doctor.userId,
+            type: "system",
+            title: `Availability ${isActive ? "Activated" : "Deactivated"}`,
+            message: `Your availability at ${
+              availability.locationName
+            } has been ${isActive ? "activated" : "deactivated"} by admin.`,
+            relatedEntityId: availability.id,
+          });
+        }
+
+        res.json(availability);
+      } catch (error) {
+        console.error("Error toggling availability:", error);
+        res
+          .status(500)
+          .json({ message: "Failed to toggle availability status" });
+      }
+    }
+  );
+
+  // Request reactivation (Doctor only)
+  app.patch(
+    "/api/doctor-availability/:id/request-reactivation",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+
+        if (user?.role !== "doctor") {
+          return res.status(403).json({
+            message: "Only doctors can request reactivation",
+          });
+        }
+
+        const availability = await storage.getDoctorAvailability(req.params.id);
+        if (!availability) {
+          return res.status(404).json({ message: "Availability not found" });
+        }
+
+        // Verify doctor owns this availability
+        const doctor = await storage.getDoctorByUserId(userId);
+        if (doctor?.id !== availability.doctorId) {
+          return res.status(403).json({
+            message:
+              "You can only request reactivation for your own availability",
+          });
+        }
+
+        if (availability.isActive) {
+          return res.status(400).json({
+            message: "This availability is already active",
+          });
+        }
+
+        const updated = await storage.updateDoctorAvailability(req.params.id, {
+          reactivationRequested: true,
+          reactivationRequestedAt: new Date(),
+          updatedAt: new Date(),
+        });
+
+        // Notify admins about reactivation request
+        const admins = await storage.getAllUsers();
+        const adminUsers = admins.filter((u) => u.role === "admin");
+
+        for (const admin of adminUsers) {
+          await storage.createNotification({
+            recipientId: admin.id,
+            type: "system",
+            title: "Availability Reactivation Request",
+            message: `Dr. ${user.firstName} ${user.lastName} requested to reactivate availability at ${availability.locationName}`,
+            relatedEntityId: updated.id,
+          });
+        }
+
+        res.json(updated);
+      } catch (error) {
+        console.error("Error requesting reactivation:", error);
+        res.status(500).json({ message: "Failed to request reactivation" });
+      }
+    }
+  );
+
+  // Get availability statistics (appointments details)
+  app.get(
+    "/api/doctor-availability/:id/stats",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+
+        const availability = await storage.getDoctorAvailability(req.params.id);
+        if (!availability) {
+          return res.status(404).json({ message: "Availability not found" });
+        }
+
+        // Check permissions
+        if (user?.role === "doctor") {
+          const doctor = await storage.getDoctorByUserId(userId);
+          if (doctor?.id !== availability.doctorId) {
+            return res.status(403).json({
+              message: "You can only view your own availability statistics",
+            });
+          }
+        } else if (user?.role !== "admin") {
+          return res.status(403).json({
+            message: "Only doctors and admins can view availability statistics",
+          });
+        }
+
+        // Get all appointments for this availability
+        const allAppointments = await storage.getAllAppointments();
+        const appointments = allAppointments.filter(
+          (apt) => apt.availabilityId === req.params.id
+        );
+
+        // Calculate statistics
+        const stats = {
+          totalBooked: appointments.length,
+          completed: appointments.filter((a) => a.status === "completed")
+            .length,
+          confirmed: appointments.filter((a) => a.status === "confirmed")
+            .length,
+          pending: appointments.filter((a) => a.status === "pending").length,
+          cancelled: appointments.filter((a) => a.status === "cancelled")
+            .length,
+          cancellationRequested: appointments.filter(
+            (a) => a.status === "cancellation_requested"
+          ).length,
+          maxPatients: availability.maxPatients,
+          bookedCount: availability.bookedCount,
+          availableSlots: availability.maxPatients - availability.bookedCount,
+          appointments: appointments.map((apt) => ({
+            id: apt.id,
+            patientName: apt.patientName,
+            appointmentDate: apt.appointmentDate,
+            appointmentTime: apt.appointmentTime,
+            status: apt.status,
+            reason: apt.reason,
+            completedAt: apt.completedAt,
+            cancelledAt: apt.cancelledAt,
+            cancellationReason: apt.cancellationReason,
+            cancelledBy: apt.cancelledBy,
+          })),
+        };
+
+        res.json(stats);
+      } catch (error) {
+        console.error("Error fetching availability stats:", error);
+        res
+          .status(500)
+          .json({ message: "Failed to fetch availability statistics" });
+      }
+    }
+  );
+
+  // Delete doctor availability
+  app.delete(
+    "/api/doctor-availability/:id",
+    isDoctorOrAdmin,
+    async (req, res) => {
+      try {
+        await storage.deleteDoctorAvailability(req.params.id);
+        res.json({ message: "Availability deleted successfully" });
+      } catch (error) {
+        console.error("Error deleting availability:", error);
+        res.status(500).json({ message: "Failed to delete availability" });
+      }
+    }
+  );
+
+  // ============================================================================
   // APPOINTMENT ROUTES
   // ============================================================================
   app.post("/api/appointments", isAuthenticated, async (req: any, res) => {
     try {
       const validatedData = insertAppointmentSchema.parse({
         ...req.body,
+        appointmentDate: new Date(req.body.appointmentDate), // Convert string to Date
         status: "pending", // Default status
       });
       const appointment = await storage.createAppointment(validatedData);
 
-      // Create notification for doctor
-      await storage.createNotification({
-        recipientId: req.body.doctorId,
-        type: "appointment",
-        title: "New Appointment Request",
-        message: `New appointment requested for ${new Date(
-          req.body.appointmentDate
-        ).toLocaleString()}`,
-        relatedEntityId: appointment.id,
-      });
+      // Get doctor's userId for notification
+      const doctor = await storage.getDoctor(req.body.doctorId);
+
+      if (doctor) {
+        // Create notification for doctor
+        await storage.createNotification({
+          recipientId: doctor.userId,
+          type: "appointment",
+          title: "New Appointment Request",
+          message: `New appointment requested for ${new Date(
+            req.body.appointmentDate
+          ).toLocaleString()}`,
+          relatedEntityId: appointment.id,
+        });
+      }
 
       res.status(201).json(appointment);
     } catch (error: any) {
@@ -212,36 +598,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
           appointments = await storage.getAppointmentsByDoctor(doctor.id);
         }
       } else if (user?.role === "admin") {
-        // Admin can see all appointments
+        // Admin can see all appointments - already enriched from storage
         appointments = await storage.getAllAppointments();
       }
 
-      // Enrich appointments with doctor and patient information
-      const enrichedAppointments = await Promise.all(
-        appointments.map(async (apt: any) => {
-          const doctor = await storage.getDoctor(apt.doctorId);
-          const doctorUser = doctor
-            ? await storage.getUser(doctor.userId)
-            : null;
-          const patient = await storage.getPatient(apt.patientId);
-          const patientUser = patient
-            ? await storage.getUser(patient.userId)
-            : null;
-
-          return {
-            ...apt,
-            doctorName: doctorUser
-              ? `Dr. ${doctorUser.firstName} ${doctorUser.lastName}`
-              : "Unknown Doctor",
-            specialty: doctor?.specialty || "General",
-            patientName: patientUser
-              ? `${patientUser.firstName} ${patientUser.lastName}`
-              : "Unknown Patient",
-          };
-        })
+      // Data is already enriched with JOINs in storage methods
+      console.log(
+        `Fetched ${appointments.length} appointments for ${user?.role}`
       );
+      if (appointments.length > 0) {
+        console.log(`Sample appointment:`, {
+          id: appointments[0].id,
+          patientName: appointments[0].patientName,
+          doctorName: appointments[0].doctorName,
+          specialization: appointments[0].specialization,
+          status: appointments[0].status,
+        });
+      }
 
-      res.json(enrichedAppointments);
+      // Prevent caching to ensure fresh data
+      res.set({
+        "Cache-Control": "no-store, no-cache, must-revalidate, private",
+        Pragma: "no-cache",
+        Expires: "0",
+      });
+
+      res.json(appointments);
     } catch (error) {
       console.error("Error fetching appointments:", error);
       res.status(500).json({ message: "Failed to fetch appointments" });
@@ -251,20 +633,887 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch(
     "/api/appointments/:id/status",
     isAuthenticated,
-    async (req, res) => {
+    async (req: any, res) => {
       try {
-        const { status } = req.body;
-        const appointment = await storage.updateAppointmentStatus(
-          req.params.id,
-          status
-        );
-        if (!appointment) {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+        const { status, cancellationReason, cancelledBy } = req.body;
+
+        // Check permissions
+        // Admin can update any status
+        // Patient can cancel their own appointments
+        if (user?.role !== "admin") {
+          if (status === "cancelled" && user?.role === "patient") {
+            // Allow patient to cancel their own appointment
+            const appointment = await storage.getAppointment(req.params.id);
+            if (!appointment) {
+              return res.status(404).json({ message: "Appointment not found" });
+            }
+            const patient = await storage.getPatientByUserId(userId);
+            if (patient?.id !== appointment.patientId) {
+              return res.status(403).json({
+                message: "You can only cancel your own appointments",
+              });
+            }
+          } else {
+            return res.status(403).json({
+              message: "Only admins can update appointment status",
+            });
+          }
+        }
+
+        const currentAppointment = await storage.getAppointment(req.params.id);
+        if (!currentAppointment) {
           return res.status(404).json({ message: "Appointment not found" });
         }
-        res.json(appointment);
+
+        // Update appointment with proper timestamps
+        const updateData: any = { status, updatedAt: new Date() };
+
+        // Set timestamps based on status change
+        if (
+          status === "cancelled" &&
+          currentAppointment.status !== "cancelled"
+        ) {
+          updateData.cancelledAt = new Date();
+          if (cancellationReason) {
+            updateData.cancellationReason = cancellationReason;
+          }
+          if (cancelledBy) {
+            updateData.cancelledBy = cancelledBy; // 'patient', 'doctor', 'admin'
+          }
+
+          // Decrement booked count
+          if (currentAppointment.availabilityId) {
+            await db
+              .update(doctorAvailability)
+              .set({
+                bookedCount: sql`GREATEST(0, ${doctorAvailability.bookedCount} - 1)`,
+                updatedAt: new Date(),
+              })
+              .where(
+                eq(doctorAvailability.id, currentAppointment.availabilityId)
+              );
+          }
+        } else if (
+          status === "confirmed" &&
+          currentAppointment.status === "pending"
+        ) {
+          updateData.approvedAt = new Date();
+          updateData.approvedBy = userId;
+        } else if (
+          status === "confirmed" &&
+          currentAppointment.status === "cancellation_requested"
+        ) {
+          // Rejecting cancellation request
+          updateData.cancellationReason = null;
+          updateData.cancellationRequestedBy = null;
+          updateData.cancellationRequestedAt = null;
+        }
+
+        const [updated] = await db
+          .update(appointments)
+          .set(updateData)
+          .where(eq(appointments.id, req.params.id))
+          .returning();
+
+        // Send notifications
+        const patient = await storage.getPatient(updated.patientId);
+        const doctor = await storage.getDoctor(updated.doctorId);
+
+        if (status === "cancelled") {
+          // Notify patient
+          if (patient) {
+            const cancelledByText =
+              cancelledBy === "patient"
+                ? "you"
+                : cancelledBy === "doctor"
+                ? "the doctor"
+                : "admin";
+
+            await storage.createNotification({
+              recipientId: patient.userId,
+              type: "appointment",
+              title: "Appointment Cancelled",
+              message: `Your appointment has been cancelled by ${cancelledByText}${
+                cancellationReason ? `. Reason: ${cancellationReason}` : ""
+              }.`,
+              relatedEntityId: updated.id,
+            });
+          }
+
+          // Notify doctor (unless doctor is the one who cancelled)
+          if (doctor && cancelledBy !== "doctor") {
+            const cancelledByText =
+              cancelledBy === "patient" ? "the patient" : "admin";
+
+            await storage.createNotification({
+              recipientId: doctor.userId,
+              type: "appointment",
+              title: "Appointment Cancelled",
+              message: `An appointment has been cancelled by ${cancelledByText}${
+                cancellationReason ? `. Reason: ${cancellationReason}` : ""
+              }.`,
+              relatedEntityId: updated.id,
+            });
+          }
+        } else if (
+          status === "confirmed" &&
+          currentAppointment.status === "pending"
+        ) {
+          // Notify patient when appointment is confirmed
+          if (patient) {
+            await storage.createNotification({
+              recipientId: patient.userId,
+              type: "appointment",
+              title: "Appointment Confirmed",
+              message: `Your appointment has been confirmed by ${
+                user?.firstName || "admin"
+              }.`,
+              relatedEntityId: updated.id,
+            });
+          }
+        }
+
+        res.json(updated);
       } catch (error) {
         console.error("Error updating appointment:", error);
         res.status(500).json({ message: "Failed to update appointment" });
+      }
+    }
+  );
+
+  app.patch(
+    "/api/appointments/:id/approve",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+        const { appointmentTime, notes } = req.body;
+
+        // Only doctors and admins can approve
+        if (user?.role !== "doctor" && user?.role !== "admin") {
+          return res.status(403).json({
+            message: "Only doctors and admins can approve appointments",
+          });
+        }
+
+        // Get the appointment
+        const appointment = await storage.getAppointment(req.params.id);
+        if (!appointment) {
+          return res.status(404).json({ message: "Appointment not found" });
+        }
+
+        // If doctor, verify they own this appointment
+        if (user?.role === "doctor") {
+          const doctor = await storage.getDoctorByUserId(userId);
+          if (doctor?.id !== appointment.doctorId) {
+            return res.status(403).json({
+              message: "You can only approve your own appointments",
+            });
+          }
+        }
+
+        // Validate appointment time is provided
+        if (!appointmentTime || !appointmentTime.trim()) {
+          return res.status(400).json({
+            message: "Appointment time is required",
+          });
+        }
+
+        // Update appointment with approved status, time, notes, and approver info
+        const updateData: any = {
+          status: "confirmed",
+          appointmentTime: appointmentTime,
+          approvedAt: new Date(),
+          approvedBy: userId,
+          updatedAt: new Date(),
+        };
+
+        // Add notes if provided (append to existing notes)
+        if (notes && notes.trim()) {
+          const approvalNote = `[Approved by ${user.firstName} ${user.lastName}]: ${notes}`;
+          updateData.notes = appointment.notes
+            ? `${appointment.notes}\n\n${approvalNote}`
+            : approvalNote;
+        }
+
+        const [updated] = await db
+          .update(appointments)
+          .set(updateData)
+          .where(eq(appointments.id, req.params.id))
+          .returning();
+
+        if (!updated) {
+          return res.status(404).json({ message: "Appointment not found" });
+        }
+
+        // Create notification for patient
+        const patient = await storage.getPatient(updated.patientId);
+        if (patient) {
+          const notificationMessage =
+            notes && notes.trim()
+              ? `Your appointment has been confirmed for ${appointmentTime}. Note: ${notes}`
+              : `Your appointment has been confirmed for ${appointmentTime}`;
+
+          await storage.createNotification({
+            recipientId: patient.userId,
+            type: "appointment",
+            title: "Appointment Confirmed",
+            message: notificationMessage,
+            relatedEntityId: updated.id,
+          });
+        }
+
+        res.json(updated);
+      } catch (error) {
+        console.error("Error approving appointment:", error);
+        res.status(500).json({ message: "Failed to approve appointment" });
+      }
+    }
+  );
+
+  // Complete appointment (Doctor only)
+  app.patch(
+    "/api/appointments/:id/complete",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+        const {
+          notes,
+          actualTime,
+          prescriptionNeeded,
+          prescriptionValidity,
+          medicines,
+          labTestsNeeded,
+          labTests,
+        } = req.body;
+
+        // Only doctors and admins can complete appointments
+        if (user?.role !== "doctor" && user?.role !== "admin") {
+          return res.status(403).json({
+            message: "Only doctors and admins can complete appointments",
+          });
+        }
+
+        // Get the appointment
+        const appointment = await storage.getAppointment(req.params.id);
+        if (!appointment) {
+          return res.status(404).json({ message: "Appointment not found" });
+        }
+
+        // If doctor, verify they own this appointment
+        if (user?.role === "doctor") {
+          const doctor = await storage.getDoctorByUserId(userId);
+          if (doctor?.id !== appointment.doctorId) {
+            return res.status(403).json({
+              message: "You can only complete your own appointments",
+            });
+          }
+        }
+
+        // Only confirmed appointments can be completed
+        if (appointment.status !== "confirmed") {
+          return res.status(400).json({
+            message: "Only confirmed appointments can be completed",
+          });
+        }
+
+        // Validate actual time is provided
+        if (!actualTime) {
+          return res.status(400).json({
+            message: "Actual visit time is required",
+          });
+        }
+
+        // Update appointment with completed status
+        const updateData: any = {
+          status: "completed",
+          completedAt: new Date(),
+          completedBy: userId,
+          actualVisitTime: actualTime,
+          completionNotes: notes || "",
+          prescriptionNeeded: prescriptionNeeded || false,
+          labTestsNeeded: labTestsNeeded || false,
+          updatedAt: new Date(),
+        };
+
+        const [updated] = await db
+          .update(appointments)
+          .set(updateData)
+          .where(eq(appointments.id, req.params.id))
+          .returning();
+
+        if (!updated) {
+          return res.status(404).json({ message: "Appointment not found" });
+        }
+
+        // Get doctor
+        const doctor = await storage.getDoctorByUserId(userId);
+        if (!doctor) {
+          return res.status(404).json({ message: "Doctor profile not found" });
+        }
+
+        // Create prescription if requested
+        let prescriptionId = null;
+        if (
+          prescriptionNeeded &&
+          medicines &&
+          Array.isArray(medicines) &&
+          medicines.length > 0
+        ) {
+          // Calculate expiry date based on validity days
+          const validityDays = prescriptionValidity || 90;
+          const expiryDate = new Date();
+          expiryDate.setDate(expiryDate.getDate() + validityDays);
+
+          // Create prescription
+          const [prescription] = await db
+            .insert(prescriptions)
+            .values({
+              patientId: appointment.patientId,
+              doctorId: doctor.id,
+              appointmentId: updated.id,
+              dateIssued: new Date(),
+              expiryDate: expiryDate,
+              validityDays: validityDays,
+              status: "active",
+              notes: notes || "",
+            })
+            .returning();
+
+          prescriptionId = prescription.id;
+
+          // Create prescription items for each medicine
+          for (const medicine of medicines) {
+            if (
+              medicine.name &&
+              medicine.dosage &&
+              medicine.frequency &&
+              medicine.duration
+            ) {
+              await db.insert(prescriptionItems).values({
+                prescriptionId: prescription.id,
+                medicineName: medicine.name,
+                dosage: medicine.dosage,
+                frequency: medicine.frequency,
+                duration: medicine.duration,
+                quantity: 1, // Default quantity
+                instructions: medicine.instructions || "",
+              });
+            }
+          }
+
+          // Notify patient about prescription
+          const patient = await storage.getPatient(updated.patientId);
+          if (patient) {
+            await storage.createNotification({
+              recipientId: patient.userId,
+              type: "prescription",
+              title: "New Prescription Available",
+              message: `Dr. ${user.firstName} ${
+                user.lastName
+              } has created a prescription with ${
+                medicines.length
+              } medicine(s). Valid until ${expiryDate.toLocaleDateString()}`,
+              relatedEntityId: prescription.id,
+            });
+          }
+        }
+
+        // Create lab test records if requested
+        if (
+          labTestsNeeded &&
+          labTests &&
+          Array.isArray(labTests) &&
+          labTests.length > 0
+        ) {
+          for (const testName of labTests) {
+            await db.insert(labTestsTable).values({
+              patientId: appointment.patientId,
+              doctorId: doctor.id,
+              testType: "Laboratory Test",
+              testName: testName,
+              status: "pending",
+              requestDate: new Date(),
+              notes: `Requested during appointment completion on ${new Date().toLocaleDateString()}`,
+            });
+          }
+
+          // Notify patient about required lab tests
+          const patient = await storage.getPatient(updated.patientId);
+          if (patient) {
+            await storage.createNotification({
+              recipientId: patient.userId,
+              type: "lab_test",
+              title: "Lab Tests Required",
+              message: `Dr. ${user.firstName} ${user.lastName} has requested ${labTests.length} lab test(s). Please book an appointment with a lab to complete them.`,
+              relatedEntityId: updated.id,
+            });
+          }
+        }
+
+        // Create notification for patient about completion
+        const patient = await storage.getPatient(updated.patientId);
+        if (patient) {
+          let notificationMessage =
+            "Your appointment has been marked as completed";
+
+          if (prescriptionNeeded) {
+            notificationMessage += ". A prescription has been prepared for you";
+          }
+
+          if (labTestsNeeded && labTests?.length > 0) {
+            notificationMessage += `. ${labTests.length} lab test(s) have been requested`;
+          }
+
+          await storage.createNotification({
+            recipientId: patient.userId,
+            type: "appointment",
+            title: "Appointment Completed",
+            message: notificationMessage,
+            relatedEntityId: updated.id,
+          });
+        }
+
+        res.json({
+          appointment: updated,
+          prescriptionCreated: prescriptionNeeded,
+          prescriptionId: prescriptionId,
+          labTestsCreated: labTestsNeeded ? labTests?.length || 0 : 0,
+        });
+      } catch (error) {
+        console.error("Error completing appointment:", error);
+        res.status(500).json({ message: "Failed to complete appointment" });
+      }
+    }
+  );
+
+  // Reschedule appointment (Doctor or Admin)
+  app.patch(
+    "/api/appointments/:id/reschedule",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+        const { appointmentDate, appointmentTime, reason } = req.body;
+
+        // Only doctors and admins can reschedule
+        if (user?.role !== "doctor" && user?.role !== "admin") {
+          return res.status(403).json({
+            message: "Only doctors and admins can reschedule appointments",
+          });
+        }
+
+        // Get the appointment
+        const appointment = await storage.getAppointment(req.params.id);
+        if (!appointment) {
+          return res.status(404).json({ message: "Appointment not found" });
+        }
+
+        // If doctor, verify they own this appointment
+        if (user?.role === "doctor") {
+          const doctor = await storage.getDoctorByUserId(userId);
+          if (doctor?.id !== appointment.doctorId) {
+            return res.status(403).json({
+              message: "You can only reschedule your own appointments",
+            });
+          }
+        }
+
+        // Cannot reschedule completed or cancelled appointments
+        if (
+          appointment.status === "completed" ||
+          appointment.status === "cancelled"
+        ) {
+          return res.status(400).json({
+            message: "Cannot reschedule completed or cancelled appointments",
+          });
+        }
+
+        // Validate new date and time
+        if (!appointmentDate) {
+          return res.status(400).json({
+            message: "New appointment date is required",
+          });
+        }
+
+        // Update appointment
+        const updateData: any = {
+          appointmentDate: new Date(appointmentDate),
+          updatedAt: new Date(),
+        };
+
+        if (appointmentTime) {
+          updateData.appointmentTime = appointmentTime;
+        }
+
+        // Add reschedule note
+        const rescheduleNote = `[Rescheduled by ${user.firstName} ${
+          user.lastName
+        }]${reason ? `: ${reason}` : ""}`;
+        updateData.notes = appointment.notes
+          ? `${appointment.notes}\n\n${rescheduleNote}`
+          : rescheduleNote;
+
+        const [updated] = await db
+          .update(appointments)
+          .set(updateData)
+          .where(eq(appointments.id, req.params.id))
+          .returning();
+
+        if (!updated) {
+          return res.status(404).json({ message: "Appointment not found" });
+        }
+
+        const newDateStr = new Date(appointmentDate).toLocaleDateString();
+        const timeStr = appointmentTime || appointment.appointmentTime || "TBD";
+
+        // Create notification for patient
+        const patient = await storage.getPatient(updated.patientId);
+        if (patient) {
+          await storage.createNotification({
+            recipientId: patient.userId,
+            type: "appointment",
+            title: "Appointment Rescheduled",
+            message: `Your appointment has been rescheduled to ${newDateStr} at ${timeStr}${
+              reason ? `. Reason: ${reason}` : ""
+            }`,
+            relatedEntityId: updated.id,
+          });
+        }
+
+        // Create notification for doctor (if admin is rescheduling)
+        if (user?.role === "admin") {
+          const doctor = await storage.getDoctor(updated.doctorId);
+          if (doctor) {
+            await storage.createNotification({
+              recipientId: doctor.userId,
+              type: "appointment",
+              title: "Appointment Rescheduled",
+              message: `Admin has rescheduled an appointment to ${newDateStr} at ${timeStr}${
+                reason ? `. Reason: ${reason}` : ""
+              }`,
+              relatedEntityId: updated.id,
+            });
+          }
+        }
+
+        res.json(updated);
+      } catch (error) {
+        console.error("Error rescheduling appointment:", error);
+        res.status(500).json({ message: "Failed to reschedule appointment" });
+      }
+    }
+  );
+
+  // Request appointment cancellation (Doctor)
+  app.patch(
+    "/api/appointments/:id/request-cancellation",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+        const { reason } = req.body;
+
+        // Only doctors can request cancellation
+        if (user?.role !== "doctor") {
+          return res.status(403).json({
+            message: "Only doctors can request appointment cancellation",
+          });
+        }
+
+        const appointment = await storage.getAppointment(req.params.id);
+        if (!appointment) {
+          return res.status(404).json({ message: "Appointment not found" });
+        }
+
+        // Verify doctor owns this appointment
+        const doctor = await storage.getDoctorByUserId(userId);
+        if (doctor?.id !== appointment.doctorId) {
+          return res.status(403).json({
+            message:
+              "You can only request cancellation for your own appointments",
+          });
+        }
+
+        if (!reason || !reason.trim()) {
+          return res.status(400).json({
+            message: "Cancellation reason is required",
+          });
+        }
+
+        // Update appointment with cancellation request
+        const [updated] = await db
+          .update(appointments)
+          .set({
+            status: "cancellation_requested",
+            cancellationReason: reason,
+            cancellationRequestedBy: userId,
+            cancellationRequestedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(appointments.id, req.params.id))
+          .returning();
+
+        // Notify admins about cancellation request
+        const admins = await storage.getAllUsers();
+        const adminUsers = admins.filter((u) => u.role === "admin");
+
+        for (const admin of adminUsers) {
+          await storage.createNotification({
+            recipientId: admin.id,
+            type: "appointment",
+            title: "Cancellation Request",
+            message: `Dr. ${user.firstName} ${user.lastName} requested to cancel an appointment. Reason: ${reason}`,
+            relatedEntityId: updated.id,
+          });
+        }
+
+        // Notify patient
+        const patient = await storage.getPatient(updated.patientId);
+        if (patient) {
+          await storage.createNotification({
+            recipientId: patient.userId,
+            type: "appointment",
+            title: "Cancellation Pending",
+            message: `Your doctor has requested to cancel the appointment. Awaiting admin approval.`,
+            relatedEntityId: updated.id,
+          });
+        }
+
+        res.json(updated);
+      } catch (error) {
+        console.error("Error requesting cancellation:", error);
+        res.status(500).json({ message: "Failed to request cancellation" });
+      }
+    }
+  );
+
+  // Approve cancellation request (Admin)
+  app.patch(
+    "/api/appointments/:id/approve-cancellation",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+
+        // Only admins can approve cancellation
+        if (user?.role !== "admin") {
+          return res.status(403).json({
+            message: "Only admins can approve cancellation requests",
+          });
+        }
+
+        const appointment = await storage.getAppointment(req.params.id);
+        if (!appointment) {
+          return res.status(404).json({ message: "Appointment not found" });
+        }
+
+        if (appointment.status !== "cancellation_requested") {
+          return res.status(400).json({
+            message: "No pending cancellation request for this appointment",
+          });
+        }
+
+        // Update appointment to cancelled
+        const [updated] = await db
+          .update(appointments)
+          .set({
+            status: "cancelled",
+            cancelledAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(appointments.id, req.params.id))
+          .returning();
+
+        // Decrement booked count if applicable
+        if (updated.availabilityId) {
+          await db
+            .update(doctorAvailability)
+            .set({
+              bookedCount: sql`GREATEST(0, ${doctorAvailability.bookedCount} - 1)`,
+              updatedAt: new Date(),
+            })
+            .where(eq(doctorAvailability.id, updated.availabilityId));
+        }
+
+        // Notify patient
+        const patient = await storage.getPatient(updated.patientId);
+        if (patient) {
+          await storage.createNotification({
+            recipientId: patient.userId,
+            type: "appointment",
+            title: "Appointment Cancelled",
+            message: `Your appointment has been cancelled by the doctor. Reason: ${
+              appointment.cancellationReason || "Not specified"
+            }`,
+            relatedEntityId: updated.id,
+          });
+        }
+
+        // Notify doctor
+        if (appointment.cancellationRequestedBy) {
+          await storage.createNotification({
+            recipientId: appointment.cancellationRequestedBy,
+            type: "appointment",
+            title: "Cancellation Approved",
+            message: `Your cancellation request has been approved by admin.`,
+            relatedEntityId: updated.id,
+          });
+        }
+
+        res.json(updated);
+      } catch (error) {
+        console.error("Error approving cancellation:", error);
+        res.status(500).json({ message: "Failed to approve cancellation" });
+      }
+    }
+  );
+
+  // Reject cancellation request (Admin)
+  app.patch(
+    "/api/appointments/:id/reject-cancellation",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+        const { reason } = req.body;
+
+        // Only admins can reject cancellation
+        if (user?.role !== "admin") {
+          return res.status(403).json({
+            message: "Only admins can reject cancellation requests",
+          });
+        }
+
+        const appointment = await storage.getAppointment(req.params.id);
+        if (!appointment) {
+          return res.status(404).json({ message: "Appointment not found" });
+        }
+
+        if (appointment.status !== "cancellation_requested") {
+          return res.status(400).json({
+            message: "No pending cancellation request for this appointment",
+          });
+        }
+
+        if (!reason || !reason.trim()) {
+          return res.status(400).json({
+            message: "Rejection reason is required",
+          });
+        }
+
+        // Update appointment back to confirmed status with rejection reason
+        const [updated] = await db
+          .update(appointments)
+          .set({
+            status: "confirmed",
+            cancellationRejectedReason: reason,
+            cancellationReason: null, // Clear the cancellation reason
+            cancellationRequestedBy: null,
+            cancellationRequestedAt: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(appointments.id, req.params.id))
+          .returning();
+
+        // Notify doctor
+        if (appointment.cancellationRequestedBy) {
+          await storage.createNotification({
+            recipientId: appointment.cancellationRequestedBy,
+            type: "appointment",
+            title: "Cancellation Request Rejected",
+            message: `Admin rejected your cancellation request. Reason: ${reason}`,
+            relatedEntityId: updated.id,
+          });
+        }
+
+        // Notify patient
+        const patient = await storage.getPatient(updated.patientId);
+        if (patient) {
+          await storage.createNotification({
+            recipientId: patient.userId,
+            type: "appointment",
+            title: "Appointment Confirmed",
+            message: `Your appointment remains scheduled as the cancellation request was not approved.`,
+            relatedEntityId: updated.id,
+          });
+        }
+
+        res.json(updated);
+      } catch (error) {
+        console.error("Error rejecting cancellation:", error);
+        res.status(500).json({ message: "Failed to reject cancellation" });
+      }
+    }
+  );
+
+  app.delete(
+    "/api/appointments/:id",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+
+        // Get the appointment to check ownership
+        const appointment = await storage.getAppointment(req.params.id);
+        if (!appointment) {
+          return res.status(404).json({ message: "Appointment not found" });
+        }
+
+        // Check if appointment is cancelled and older than 24 hours
+        if (appointment.status !== "cancelled" || !appointment.cancelledAt) {
+          return res.status(403).json({
+            message: "Only cancelled appointments can be deleted",
+          });
+        }
+
+        const cancelledTime = new Date(appointment.cancelledAt).getTime();
+        const now = new Date().getTime();
+        const hoursSinceCancelled = (now - cancelledTime) / (1000 * 60 * 60);
+
+        if (hoursSinceCancelled < 24) {
+          return res.status(403).json({
+            message:
+              "Cancelled appointments can only be deleted after 24 hours",
+          });
+        }
+
+        // Check authorization - ONLY doctor involved or admin can delete
+        let authorized = false;
+
+        if (user?.role === "admin") {
+          authorized = true;
+        } else if (user?.role === "doctor") {
+          const doctor = await storage.getDoctorByUserId(userId);
+          authorized = doctor?.id === appointment.doctorId;
+        }
+        // Patients cannot delete appointments
+
+        if (!authorized) {
+          return res.status(403).json({
+            message: "You don't have permission to delete this appointment",
+          });
+        }
+
+        const deleted = await storage.deleteAppointment(req.params.id);
+        if (!deleted) {
+          return res.status(404).json({ message: "Appointment not found" });
+        }
+
+        res.json({ message: "Appointment deleted successfully" });
+      } catch (error) {
+        console.error("Error deleting appointment:", error);
+        res.status(500).json({ message: "Failed to delete appointment" });
       }
     }
   );

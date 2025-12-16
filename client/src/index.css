@@ -363,4 +363,122 @@
   .animation-delay-4000 {
     animation-delay: 4s;
   }
+
+  /* Leaflet Map Fixes */
+  .leaflet-container {
+    font-family: inherit;
+    z-index: 0;
+  }
+
+  .leaflet-popup-content-wrapper {
+    border-radius: 12px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+    overflow: hidden;
+  }
+
+  .leaflet-popup-content {
+    margin: 0;
+    line-height: 1.5;
+    font-family: inherit;
+  }
+
+  .leaflet-popup-tip {
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.1);
+  }
+
+  /* Custom doctor popup styling */
+  .doctor-popup .leaflet-popup-content-wrapper {
+    background: linear-gradient(to bottom, #ffffff 0%, #f8fafc 100%);
+  }
+
+  /* Custom Doctor Marker Styles */
+  .custom-doctor-marker {
+    background: transparent !important;
+    border: none !important;
+  }
+
+  .doctor-marker-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    transition: transform 0.2s ease;
+  }
+
+  .doctor-marker-container:hover {
+    transform: scale(1.1);
+  }
+
+  .doctor-avatar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .avatar-circle {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: bold;
+    font-size: 18px;
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+    border: 3px solid white;
+    transition: all 0.3s ease;
+  }
+
+  .doctor-marker-container:hover .avatar-circle {
+    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.6);
+    transform: scale(1.05);
+  }
+
+  .doctor-count {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    background: #ef4444;
+    color: white;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: bold;
+    border: 2px solid white;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  }
+
+  .doctor-name {
+    background: white;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #1e293b;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    white-space: nowrap;
+    border: 1px solid #e2e8f0;
+  }
+
+  /* Doctor Tooltip Styling */
+  .doctor-tooltip .leaflet-tooltip {
+    background: white;
+    border: none;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+    padding: 0;
+    max-width: 320px;
+  }
+
+  .doctor-tooltip .leaflet-tooltip-top::before {
+    border-top-color: white;
+  }
 }

@@ -33,26 +33,28 @@ export default function Notifications() {
     }
   }, [isAuthenticated, isLoading, toast]);
 
-  // Fetch notifications from backend
+  // Fetch notifications from backend with real-time polling
   const { data: notifications = [], isLoading: loadingNotifications } =
     useQuery<any[]>({
       queryKey: ["/api/notifications"],
       enabled: isAuthenticated,
+      refetchInterval: 10000, // Refetch every 10 seconds for real-time updates
     });
 
   // Mark single notification as read
   const markAsRead = useMutation({
     mutationFn: async (id: string) => {
-      await apiRequest(`/api/notifications/${id}/read`, {
+      const response = await fetch(`/api/notifications/${id}/read`, {
         method: "PATCH",
+        credentials: "include",
       });
+      if (!response.ok) {
+        throw new Error("Failed to mark notification as read");
+      }
+      return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
-      toast({
-        title: "Success",
-        description: "Notification marked as read",
-      });
     },
     onError: (error: Error) => {
       toast({
@@ -66,9 +68,14 @@ export default function Notifications() {
   // Mark all notifications as read
   const markAllAsRead = useMutation({
     mutationFn: async () => {
-      await apiRequest("/api/notifications/mark-all-read", {
+      const response = await fetch("/api/notifications/mark-all-read", {
         method: "PATCH",
+        credentials: "include",
       });
+      if (!response.ok) {
+        throw new Error("Failed to mark all notifications as read");
+      }
+      return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
