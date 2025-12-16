@@ -221,7 +221,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/doctor-availability", isAuthenticated, async (req, res) => {
     try {
       const availability = await storage.getAllDoctorAvailability();
-      res.json(availability);
+
+      // Automatically update finished status for past availabilities
+      const now = new Date();
+      const updatedAvailability = await Promise.all(
+        availability.map(async (avail) => {
+          const availDate = new Date(avail.availableDate);
+          const [endHour, endMinute] = avail.endTime.split(":").map(Number);
+          availDate.setHours(endHour, endMinute, 0, 0);
+
+          // If end time has passed and status is not already finished or deleted
+          if (
+            availDate < now &&
+            avail.status !== "finished" &&
+            avail.status !== "deleted"
+          ) {
+            await storage.updateDoctorAvailability(avail.id, {
+              status: "finished",
+              updatedAt: new Date(),
+            });
+            return { ...avail, status: "finished" };
+          }
+          return avail;
+        })
+      );
+
+      res.json(updatedAvailability);
     } catch (error) {
       console.error("Error fetching availability:", error);
       res.status(500).json({ message: "Failed to fetch availability" });
@@ -237,7 +262,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const availability = await storage.getDoctorAvailabilityByDoctor(
           req.params.doctorId
         );
-        res.json(availability);
+
+        // Automatically update finished status for past availabilities
+        const now = new Date();
+        const updatedAvailability = await Promise.all(
+          availability.map(async (avail) => {
+            const availDate = new Date(avail.availableDate);
+            const [endHour, endMinute] = avail.endTime.split(":").map(Number);
+            availDate.setHours(endHour, endMinute, 0, 0);
+
+            // If end time has passed and status is not already finished or deleted
+            if (
+              availDate < now &&
+              avail.status !== "finished" &&
+              avail.status !== "deleted"
+            ) {
+              await storage.updateDoctorAvailability(avail.id, {
+                status: "finished",
+                updatedAt: new Date(),
+              });
+              return { ...avail, status: "finished" };
+            }
+            return avail;
+          })
+        );
+
+        res.json(updatedAvailability);
       } catch (error) {
         console.error("Error fetching doctor availability:", error);
         res
@@ -341,9 +391,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch(
     "/api/doctor-availability/:id/toggle",
     isAdmin,
-    async (req, res) => {
+    async (req: any, res) => {
       try {
         const { isActive } = req.body;
+        const userId = req.user.id;
 
         if (typeof isActive !== "boolean") {
           return res
@@ -352,16 +403,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         const status = isActive ? "active" : "inactive";
+        const updateData: any = {
+          isActive,
+          status,
+          reactivationRequested: false, // Clear any pending reactivation request
+          reactivationRequestedAt: null,
+          updatedAt: new Date(),
+        };
+
+        // Track deactivation by admin
+        if (!isActive) {
+          updateData.deactivatedBy = "admin";
+          updateData.deactivatedAt = new Date();
+        } else {
+          // Clear deactivation tracking when reactivating
+          updateData.deactivatedBy = null;
+          updateData.deactivatedAt = null;
+        }
 
         const availability = await storage.updateDoctorAvailability(
           req.params.id,
-          {
-            isActive,
-            status,
-            reactivationRequested: false, // Clear any pending reactivation request
-            reactivationRequestedAt: null,
-            updatedAt: new Date(),
-          }
+          updateData
         );
 
         if (!availability) {
@@ -377,7 +439,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             title: `Availability ${isActive ? "Activated" : "Deactivated"}`,
             message: `Your availability at ${
               availability.locationName
-            } has been ${isActive ? "activated" : "deactivated"} by admin.`,
+            } has been ${isActive ? "activated" : "deactivated"} by admin. ${
+              !isActive
+                ? "You can request reactivation or permanently delete this availability."
+                : ""
+            }`,
             relatedEntityId: availability.id,
           });
         }
@@ -529,14 +595,162 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   );
 
-  // Delete doctor availability
+  // Delete doctor availability (soft delete by doctor, hard delete by admin)
   app.delete(
     "/api/doctor-availability/:id",
-    isDoctorOrAdmin,
-    async (req, res) => {
+    isAuthenticated,
+    async (req: any, res) => {
       try {
-        await storage.deleteDoctorAvailability(req.params.id);
-        res.json({ message: "Availability deleted successfully" });
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+
+        const availability = await storage.getDoctorAvailability(req.params.id);
+        if (!availability) {
+          return res.status(404).json({ message: "Availability not found" });
+        }
+
+        // Check permissions
+        if (user?.role === "doctor") {
+          const doctor = await storage.getDoctorByUserId(userId);
+          if (doctor?.id !== availability.doctorId) {
+            return res.status(403).json({
+              message: "You can only delete your own availability",
+            });
+          }
+
+          // Doctors can only permanently delete if admin deactivated it
+          if (availability.isActive) {
+            return res.status(400).json({
+              message:
+                "Cannot delete active availability. Please contact admin.",
+            });
+          }
+
+          // Check 6-hour rule: doctor can only delete if more than 6 hours before start time
+          const availabilityDateTime = new Date(
+            `${availability.availableDate}T${availability.startTime}`
+          );
+          const now = new Date();
+          const hoursDifference =
+            (availabilityDateTime.getTime() - now.getTime()) / (1000 * 60 * 60);
+
+          if (hoursDifference < 6) {
+            return res.status(400).json({
+              message:
+                "Cannot delete availability less than 6 hours before scheduled time",
+            });
+          }
+
+          // Get all appointments for this availability
+          const allAppointments = await storage.getAllAppointments();
+          const affectedAppointments = allAppointments.filter(
+            (apt) =>
+              apt.availabilityId === availability.id &&
+              apt.status !== "cancelled" &&
+              apt.status !== "completed"
+          );
+
+          // Cancel all affected appointments
+          for (const appointment of affectedAppointments) {
+            await storage.updateAppointmentStatus(appointment.id, "cancelled");
+            await db
+              .update(appointments)
+              .set({
+                cancelledBy: "doctor",
+                cancellationReason: "Doctor not available",
+                cancelledAt: new Date(),
+                updatedAt: new Date(),
+              })
+              .where(eq(appointments.id, appointment.id));
+
+            // Notify each patient about cancellation
+            if (appointment.patientId) {
+              await storage.createNotification({
+                recipientId: appointment.patientId,
+                type: "appointment",
+                title: "Appointment Cancelled",
+                message: `Your appointment on ${new Date(
+                  appointment.appointmentDate
+                ).toLocaleDateString()} has been cancelled. Reason: Doctor not available`,
+                relatedEntityId: appointment.id,
+              });
+            }
+          }
+
+          // Mark as deleted (soft delete)
+          await storage.updateDoctorAvailability(req.params.id, {
+            status: "deleted",
+            deletedAt: new Date(),
+            deletedBy: "doctor",
+            updatedAt: new Date(),
+          });
+
+          // Notify admins about deletion with affected appointment count
+          const admins = await storage.getAllUsers();
+          const adminUsers = admins.filter((u) => u.role === "admin");
+
+          for (const admin of adminUsers) {
+            await storage.createNotification({
+              recipientId: admin.id,
+              type: "system",
+              title: "Availability Deleted by Doctor",
+              message: `Dr. ${user.firstName} ${user.lastName} permanently deleted availability at ${availability.locationName}. ${affectedAppointments.length} appointment(s) cancelled.`,
+              relatedEntityId: availability.id,
+            });
+          }
+
+          res.json({
+            message: "Availability deleted successfully",
+            cancelledAppointments: affectedAppointments.length,
+          });
+        } else if (user?.role === "admin") {
+          // Admin can hard delete - but first cancel all associated appointments
+          const allAppointments = await storage.getAllAppointments();
+          const affectedAppointments = allAppointments.filter(
+            (apt) =>
+              apt.availabilityId === availability.id &&
+              apt.status !== "cancelled" &&
+              apt.status !== "completed"
+          );
+
+          // Cancel all affected appointments
+          for (const appointment of affectedAppointments) {
+            await storage.updateAppointmentStatus(appointment.id, "cancelled");
+            await db
+              .update(appointments)
+              .set({
+                cancelledBy: "admin",
+                cancellationReason: "Doctor not available",
+                cancelledAt: new Date(),
+                updatedAt: new Date(),
+              })
+              .where(eq(appointments.id, appointment.id));
+
+            // Notify each patient about cancellation
+            if (appointment.patientId) {
+              await storage.createNotification({
+                recipientId: appointment.patientId,
+                type: "appointment",
+                title: "Appointment Cancelled",
+                message: `Your appointment on ${new Date(
+                  appointment.appointmentDate
+                ).toLocaleDateString()} has been cancelled. Reason: Doctor not available`,
+                relatedEntityId: appointment.id,
+              });
+            }
+          }
+
+          // Now hard delete the availability
+          await storage.deleteDoctorAvailability(req.params.id);
+          res.json({
+            message: "Availability deleted successfully",
+            cancelledAppointments: affectedAppointments.length,
+          });
+        } else {
+          return res.status(403).json({
+            message: "You don't have permission to delete availability",
+          });
+        }
       } catch (error) {
         console.error("Error deleting availability:", error);
         res.status(500).json({ message: "Failed to delete availability" });
@@ -600,6 +814,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (user?.role === "admin") {
         // Admin can see all appointments - already enriched from storage
         appointments = await storage.getAllAppointments();
+      }
+
+      // Check if any appointments are linked to deleted availability and auto-cancel them
+      for (const appointment of appointments) {
+        if (
+          appointment.availabilityId &&
+          appointment.status !== "cancelled" &&
+          appointment.status !== "completed"
+        ) {
+          const availability = await storage.getDoctorAvailability(
+            appointment.availabilityId
+          );
+          if (availability && availability.status === "deleted") {
+            // Auto-cancel the appointment
+            await storage.updateAppointmentStatus(appointment.id, "cancelled");
+            await db
+              .update(appointments)
+              .set({
+                cancelledBy: "doctor",
+                cancellationReason: "Doctor not available",
+                cancelledAt: new Date(),
+                updatedAt: new Date(),
+              })
+              .where(eq(appointments.id, appointment.id));
+
+            // Update the appointment object to reflect the change
+            appointment.status = "cancelled";
+            appointment.cancelledBy = "doctor";
+            appointment.cancellationReason = "Doctor not available";
+            appointment.cancelledAt = new Date();
+          }
+        }
       }
 
       // Data is already enriched with JOINs in storage methods

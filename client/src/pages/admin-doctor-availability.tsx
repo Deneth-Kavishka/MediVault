@@ -60,6 +60,10 @@ interface DoctorAvailability {
   status: string;
   reactivationRequested: boolean;
   reactivationRequestedAt: string | null;
+  deletedAt: string | null;
+  deletedBy: string | null;
+  deactivatedBy: string | null;
+  deactivatedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -113,11 +117,12 @@ export default function AdminDoctorAvailability() {
         throw new Error(`Failed to fetch availability: ${response.statusText}`);
       }
       const data = await response.json();
-      console.log("Fetched availability:", data.length, "records");
+      console.log("✅ Fetched availability:", data.length, "records");
+      console.log("📊 Data sample:", data[0]);
       return data;
     },
-    staleTime: 5000, // Keep data fresh for 5 seconds to prevent immediate refetch
-    refetchOnWindowFocus: false, // Don't refetch on window focus during active editing
+    staleTime: 30000, // Keep data fresh for 30 seconds
+    refetchOnWindowFocus: false, // Don't refetch on window focus
   });
 
   // Toggle availability active/inactive status
@@ -166,8 +171,8 @@ export default function AdminDoctorAvailability() {
 
       return { previousData };
     },
-    onSuccess: async (data, variables) => {
-      // Update the cache with the server response immediately
+    onSuccess: (data, variables) => {
+      // Update the cache with the server response
       queryClient.setQueryData(
         ["admin-doctor-availability"],
         (old: DoctorAvailability[] | undefined) => {
@@ -177,11 +182,6 @@ export default function AdminDoctorAvailability() {
           );
         }
       );
-
-      // Then invalidate to refetch in the background
-      await queryClient.invalidateQueries({
-        queryKey: ["admin-doctor-availability"],
-      });
 
       toast({
         title: "Success",
@@ -234,11 +234,19 @@ export default function AdminDoctorAvailability() {
   // Create a map of doctorId to doctor info
   const doctorMap = new Map(doctors?.map((d) => [d.id, d]));
 
+  // Debug logging
+  console.log("📋 Availability data:", availability?.length || 0);
+  console.log("👨‍⚕️ Doctors data:", doctors?.length || 0);
+  console.log("🗺️ Doctor map size:", doctorMap.size);
+
   const getStatusBadge = (avail: DoctorAvailability) => {
-    const isPast = new Date(avail.availableDate) < new Date();
-    const status = isPast
-      ? "finished"
-      : avail.status || (avail.isActive ? "active" : "inactive");
+    // Check for explicit status values first, then fall back to isActive
+    let status = avail.status;
+
+    // If status is null, undefined, or empty, derive from isActive
+    if (!status || status === "active" || status === "inactive") {
+      status = avail.isActive ? "active" : "inactive";
+    }
 
     switch (status) {
       case "finished":
@@ -254,7 +262,17 @@ export default function AdminDoctorAvailability() {
           </Badge>
         );
       case "inactive":
-        return <Badge variant="secondary">Inactive</Badge>;
+        return (
+          <Badge variant="secondary" className="bg-orange-500 text-white">
+            Inactive
+          </Badge>
+        );
+      case "deleted":
+        return (
+          <Badge variant="destructive" className="bg-red-600 text-white">
+            Deleted
+          </Badge>
+        );
       default:
         return <Badge>{status}</Badge>;
     }
@@ -268,6 +286,7 @@ export default function AdminDoctorAvailability() {
       : doctor?.userId || "";
 
     const matchesSearch =
+      !searchQuery ||
       doctorName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       doctor?.specialization
         ?.toLowerCase()
@@ -281,6 +300,8 @@ export default function AdminDoctorAvailability() {
 
     return matchesSearch && matchesCity;
   });
+
+  console.log("🔍 Filtered availability:", filteredAvailability?.length || 0);
 
   // Group by doctor
   const groupedByDoctor = filteredAvailability?.reduce((acc, avail) => {
@@ -427,7 +448,7 @@ export default function AdminDoctorAvailability() {
                   <TableHead>Time</TableHead>
                   <TableHead>Slots</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Request</TableHead>
+                  <TableHead>Status Info</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -491,19 +512,51 @@ export default function AdminDoctorAvailability() {
                         <TableCell>
                           <div className="flex items-center gap-2">
                             <Users className="h-4 w-4 text-muted-foreground" />
-                            <span>{avail.maxPatients}</span>
+                            <span>
+                              {avail.bookedCount}/{avail.maxPatients}
+                            </span>
                           </div>
                         </TableCell>
                         <TableCell>{getStatusBadge(avail)}</TableCell>
                         <TableCell>
-                          {avail.reactivationRequested && (
-                            <Badge
-                              variant="outline"
-                              className="border-orange-500 text-orange-500"
-                            >
-                              Pending Request
-                            </Badge>
-                          )}
+                          <div className="space-y-1">
+                            {avail.status === "deleted" && avail.deletedAt && (
+                              <div className="text-xs text-muted-foreground">
+                                <div className="font-medium text-red-600">
+                                  Deleted by: Doctor
+                                </div>
+                                <div>
+                                  {new Date(avail.deletedAt).toLocaleString()}
+                                </div>
+                              </div>
+                            )}
+                            {avail.status === "inactive" &&
+                              avail.deactivatedAt && (
+                                <div className="text-xs text-muted-foreground">
+                                  <div className="font-medium">
+                                    Deactivated by: {avail.deactivatedBy}
+                                  </div>
+                                  <div>
+                                    {new Date(
+                                      avail.deactivatedAt
+                                    ).toLocaleString()}
+                                  </div>
+                                </div>
+                              )}
+                            {avail.reactivationRequested && (
+                              <Badge
+                                variant="outline"
+                                className="border-orange-500 text-orange-500"
+                              >
+                                Reactivation Requested
+                              </Badge>
+                            )}
+                            {avail.status === "finished" && (
+                              <div className="text-xs text-muted-foreground">
+                                Time elapsed
+                              </div>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
@@ -529,8 +582,10 @@ export default function AdminDoctorAvailability() {
                               }
                               disabled={
                                 toggleAvailability.isPending ||
-                                avail.status === "finished"
+                                avail.status === "finished" ||
+                                avail.status === "deleted"
                               }
+                              className="scale-75"
                             />
                           </div>
                         </TableCell>

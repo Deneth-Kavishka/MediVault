@@ -690,15 +690,12 @@ export class DatabaseStorage implements IStorage {
   async getDoctorAvailabilityByDoctor(
     doctorId: string
   ): Promise<DoctorAvailability[]> {
+    // Return ALL availability for doctor (active, inactive, deleted, finished)
+    // Doctor needs to see deactivated records to request reactivation or delete
     return await db
       .select()
       .from(doctorAvailability)
-      .where(
-        and(
-          eq(doctorAvailability.doctorId, doctorId),
-          eq(doctorAvailability.isActive, true)
-        )
-      )
+      .where(eq(doctorAvailability.doctorId, doctorId))
       .orderBy(doctorAvailability.availableDate);
   }
 
@@ -980,12 +977,21 @@ export class DatabaseStorage implements IStorage {
         doctorLastName: doctorUser.lastName,
         doctorSpecialization: doctors.specialization,
         doctorLicenseNumber: doctors.licenseNumber,
+        availabilityLocation: doctorAvailability.locationName,
+        availabilityAddress: doctorAvailability.locationAddress,
+        availabilityDate: doctorAvailability.availableDate,
+        availabilityStartTime: doctorAvailability.startTime,
+        availabilityEndTime: doctorAvailability.endTime,
       })
       .from(appointments)
       .leftJoin(patients, eq(appointments.patientId, patients.id))
       .leftJoin(patientUser, eq(patients.userId, patientUser.id))
       .leftJoin(doctors, eq(appointments.doctorId, doctors.id))
       .leftJoin(doctorUser, eq(doctors.userId, doctorUser.id))
+      .leftJoin(
+        doctorAvailability,
+        eq(appointments.availabilityId, doctorAvailability.id)
+      )
       .where(eq(appointments.doctorId, doctorId))
       .orderBy(desc(appointments.appointmentDate));
 
@@ -1023,6 +1029,15 @@ export class DatabaseStorage implements IStorage {
           lastName: row.doctorLastName || "",
         },
       },
+      availability: row.availabilityId
+        ? {
+            locationName: row.availabilityLocation || "",
+            locationAddress: row.availabilityAddress || "",
+            availableDate: row.availabilityDate || "",
+            startTime: row.availabilityStartTime || "",
+            endTime: row.availabilityEndTime || "",
+          }
+        : null,
       // Also include flat fields for backward compatibility
       patientName:
         row.patientFirstName && row.patientLastName

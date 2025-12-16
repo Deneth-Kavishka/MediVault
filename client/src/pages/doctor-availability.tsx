@@ -48,6 +48,9 @@ import {
   Calendar as CalendarIcon,
   Clock,
   Users,
+  AlertCircle,
+  XCircle,
+  CheckCircle,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Calendar } from "@/components/ui/calendar";
@@ -77,6 +80,10 @@ interface DoctorAvailability {
   status?: string;
   reactivationRequested?: boolean;
   reactivationRequestedAt?: string;
+  deletedAt?: string | null;
+  deletedBy?: string | null;
+  deactivatedBy?: string | null;
+  deactivatedAt?: string | null;
   createdAt: string;
 }
 
@@ -135,8 +142,9 @@ export default function DoctorAvailability() {
       return response.json();
     },
     enabled: !!doctor?.id,
-    refetchInterval: 10000,
-    staleTime: 0,
+    staleTime: 60000, // Keep data fresh for 1 minute
+    refetchOnWindowFocus: false, // Don't refetch on window focus
+    refetchOnMount: false, // Don't refetch when component mounts if data exists
   });
 
   // Add availability mutation
@@ -220,6 +228,39 @@ export default function DoctorAvailability() {
       toast({
         title: "Error",
         description: error.message || "Failed to delete availability",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Request reactivation mutation
+  const requestReactivationMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const response = await fetch(
+        `/api/doctor-availability/${id}/request-reactivation`,
+        {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(error || "Failed to request reactivation");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["doctor-availability"] });
+      toast({
+        title: "Success",
+        description: "Reactivation request sent to admin",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to request reactivation",
         variant: "destructive",
       });
     },
@@ -388,29 +429,66 @@ export default function DoctorAvailability() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Total Schedules
+              Active Schedules
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {availability?.length || 0}
+              {availability?.filter((a) => a.status === "active").length || 0}
             </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Currently active
+            </p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Unique Locations
+              Total Available Capacity
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {new Set(availability?.map((a) => a.locationName)).size || 0}
+              {(() => {
+                const totalCapacity =
+                  availability
+                    ?.filter(
+                      (a) => a.status === "active" || a.status === "inactive"
+                    )
+                    .reduce((sum, a) => sum + a.maxPatients, 0) || 0;
+                const totalBooked =
+                  availability
+                    ?.filter(
+                      (a) => a.status === "active" || a.status === "inactive"
+                    )
+                    .reduce((sum, a) => sum + a.bookedCount, 0) || 0;
+                return totalCapacity - totalBooked;
+              })()}
             </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Slots available
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Total Booked
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {availability
+                ?.filter((a) => a.status !== "deleted")
+                .reduce((sum, a) => sum + a.bookedCount, 0) || 0}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Appointments booked
+            </p>
           </CardContent>
         </Card>
         <Card>
@@ -421,8 +499,30 @@ export default function DoctorAvailability() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {availability?.reduce((sum, a) => sum + a.maxPatients, 0) || 0}
+              {availability
+                ?.filter((a) => a.status !== "deleted")
+                .reduce((sum, a) => sum + a.maxPatients, 0) || 0}
             </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Maximum patients
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Unique Locations
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {new Set(
+                availability
+                  ?.filter((a) => a.status !== "deleted")
+                  .map((a) => a.locationName)
+              ).size || 0}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">Service areas</p>
           </CardContent>
         </Card>
       </div>
@@ -445,11 +545,41 @@ export default function DoctorAvailability() {
                   </div>
                   <div className="flex flex-col gap-1 items-end">
                     <Badge
-                      variant={avail.isActive ? "default" : "secondary"}
-                      className={avail.isActive ? "bg-green-500" : ""}
+                      variant={
+                        avail.status === "deleted"
+                          ? "destructive"
+                          : avail.status === "finished"
+                          ? "secondary"
+                          : avail.isActive
+                          ? "default"
+                          : "secondary"
+                      }
+                      className={
+                        avail.status === "deleted"
+                          ? "bg-red-600"
+                          : avail.status === "finished"
+                          ? "bg-gray-500"
+                          : avail.isActive
+                          ? "bg-green-500"
+                          : "bg-orange-500"
+                      }
                     >
-                      {avail.isActive ? "Active" : "Inactive"}
+                      {avail.status === "deleted"
+                        ? "Deleted"
+                        : avail.status === "finished"
+                        ? "Finished"
+                        : avail.isActive
+                        ? "Active"
+                        : "Inactive"}
                     </Badge>
+                    {avail.reactivationRequested && (
+                      <Badge
+                        variant="outline"
+                        className="border-orange-500 text-orange-500 text-xs"
+                      >
+                        Pending Request
+                      </Badge>
+                    )}
                   </div>
                 </div>
               </CardHeader>
@@ -527,25 +657,121 @@ export default function DoctorAvailability() {
                   </div>
                 )}
 
+                {/* Deleted by Doctor Alert */}
+                {avail.status === "deleted" && avail.deletedAt && (
+                  <div className="bg-red-50 border border-red-200 rounded-md p-3 mt-2">
+                    <div className="flex items-start gap-2">
+                      <XCircle className="h-5 w-5 text-red-600 mt-0.5" />
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-red-900">
+                          Permanently Deleted
+                        </p>
+                        <p className="text-xs text-red-700 mt-1">
+                          You deleted this availability on{" "}
+                          {new Date(avail.deletedAt).toLocaleString()}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          This record is visible to admin but cannot be
+                          reactivated.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Deactivated by Admin Alert */}
+                {!avail.isActive &&
+                  avail.deactivatedBy === "admin" &&
+                  avail.status !== "deleted" && (
+                    <div className="bg-orange-50 border border-orange-200 rounded-md p-4 mt-3">
+                      <div className="space-y-3">
+                        <div className="flex items-start gap-2">
+                          <AlertCircle className="h-5 w-5 text-orange-600 flex-shrink-0 mt-0.5" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-orange-900">
+                              Deactivated by Admin
+                            </p>
+                            <p className="text-xs text-orange-700 mt-1">
+                              This availability was deactivated on{" "}
+                              {avail.deactivatedAt &&
+                                new Date(avail.deactivatedAt).toLocaleString(
+                                  "en-US",
+                                  {
+                                    month: "short",
+                                    day: "numeric",
+                                    year: "numeric",
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  }
+                                )}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              requestReactivationMutation.mutate(avail.id)
+                            }
+                            disabled={
+                              avail.reactivationRequested ||
+                              requestReactivationMutation.isPending
+                            }
+                            className="text-xs h-7 px-2.5 bg-orange-600 hover:bg-orange-700 text-white border-0"
+                          >
+                            {avail.reactivationRequested ? (
+                              <>
+                                <CheckCircle className="h-3 w-3 mr-1" />
+                                Pending
+                              </>
+                            ) : (
+                              <>
+                                <AlertCircle className="h-3 w-3 mr-1" />
+                                Reactivate
+                              </>
+                            )}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => handleDeleteClick(avail)}
+                            className="text-xs h-7 px-2.5"
+                          >
+                            <Trash2 className="h-3 w-3 mr-1" />
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                {/* Action buttons - only show if not deactivated by admin */}
                 <div className="flex gap-2 pt-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleEditClick(avail)}
-                    className="flex-1"
-                  >
-                    <Edit className="h-4 w-4 mr-1" />
-                    Edit
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleDeleteClick(avail)}
-                    className="flex-1"
-                  >
-                    <Trash2 className="h-4 w-4 mr-1 text-destructive" />
-                    Delete
-                  </Button>
+                  {avail.status !== "deleted" &&
+                    avail.status !== "finished" &&
+                    !(avail.deactivatedBy === "admin" && !avail.isActive) && (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleEditClick(avail)}
+                          className="flex-1"
+                          disabled={!avail.isActive}
+                        >
+                          <Edit className="h-4 w-4 mr-1" />
+                          Edit
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleDeleteClick(avail)}
+                          className="flex-1"
+                        >
+                          <Trash2 className="h-4 w-4 mr-1 text-destructive" />
+                          Delete
+                        </Button>
+                      </>
+                    )}
                 </div>
               </CardContent>
             </Card>

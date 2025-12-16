@@ -17,6 +17,8 @@ import {
   Trash2,
   Check,
   X,
+  Search,
+  SlidersHorizontal,
 } from "lucide-react";
 import {
   Dialog,
@@ -328,6 +330,19 @@ function BookAppointmentForm({ onSuccess }: { onSuccess: () => void }) {
 function AppointmentsList() {
   const { user } = useAuth();
   const { toast } = useToast();
+
+  // Filter and search states
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState<string>("all");
+  const [showFilters, setShowFilters] = useState(false);
+  const [dateFilter, setDateFilter] = useState<{ from: string; to: string }>({
+    from: "",
+    to: "",
+  });
+  const [sortBy, setSortBy] = useState<"booking" | "appointment">(
+    "appointment"
+  );
+
   const [approveDialog, setApproveDialog] = useState<{
     open: boolean;
     appointment: any | null;
@@ -380,6 +395,127 @@ function AppointmentsList() {
     queryKey: ["/api/appointments"],
     retry: 1,
   });
+
+  // Filter and search appointments
+  const filteredAppointments = appointments.filter((appointment) => {
+    // Search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      const matchesSearch =
+        appointment.doctorName?.toLowerCase().includes(query) ||
+        appointment.reason?.toLowerCase().includes(query) ||
+        appointment.specialty?.toLowerCase().includes(query) ||
+        appointment.patientName?.toLowerCase().includes(query);
+      if (!matchesSearch) return false;
+    }
+
+    // Category filter
+    if (selectedCategory !== "all") {
+      const now = new Date();
+      const appointmentDate = new Date(appointment.appointmentDate);
+
+      switch (selectedCategory) {
+        case "upcoming":
+          if (
+            appointment.status === "cancelled" ||
+            appointment.status === "completed" ||
+            appointmentDate < now
+          )
+            return false;
+          break;
+        case "past":
+          if (appointmentDate >= now && appointment.status !== "completed")
+            return false;
+          break;
+        case "cancelled":
+          if (appointment.status !== "cancelled") return false;
+          break;
+        case "completed":
+          if (appointment.status !== "completed") return false;
+          break;
+        case "pending":
+          if (appointment.status !== "pending") return false;
+          break;
+        case "confirmed":
+          if (appointment.status !== "confirmed") return false;
+          break;
+      }
+    }
+
+    // Date range filter
+    if (dateFilter.from) {
+      const fromDate = new Date(dateFilter.from);
+      const appointmentDate = new Date(appointment.appointmentDate);
+      if (appointmentDate < fromDate) return false;
+    }
+    if (dateFilter.to) {
+      const toDate = new Date(dateFilter.to);
+      toDate.setHours(23, 59, 59, 999); // End of day
+      const appointmentDate = new Date(appointment.appointmentDate);
+      if (appointmentDate > toDate) return false;
+    }
+
+    return true;
+  });
+
+  // Sort appointments - latest dates first
+  const sortedAppointments = [...filteredAppointments].sort((a, b) => {
+    if (sortBy === "booking") {
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    } else {
+      // Appointment date - latest first
+      return (
+        new Date(b.appointmentDate).getTime() -
+        new Date(a.appointmentDate).getTime()
+      );
+    }
+  });
+
+  // Group appointments by date for separators
+  const groupAppointmentsByDate = (appointments: any[]) => {
+    const groups: { [key: string]: any[] } = {};
+    appointments.forEach((appointment) => {
+      const dateKey = format(
+        new Date(
+          sortBy === "booking"
+            ? appointment.createdAt
+            : appointment.appointmentDate
+        ),
+        "yyyy-MM-dd"
+      );
+      if (!groups[dateKey]) {
+        groups[dateKey] = [];
+      }
+      groups[dateKey].push(appointment);
+    });
+    return groups;
+  };
+
+  const groupedByDate = groupAppointmentsByDate(sortedAppointments);
+  const dateKeys = Object.keys(groupedByDate).sort().reverse(); // Latest dates first
+
+  // Calculate category counts
+  const categoryCounts = {
+    all: appointments.length,
+    upcoming: appointments.filter((apt) => {
+      const now = new Date();
+      const aptDate = new Date(apt.appointmentDate);
+      return (
+        apt.status !== "cancelled" &&
+        apt.status !== "completed" &&
+        aptDate >= now
+      );
+    }).length,
+    past: appointments.filter((apt) => {
+      const now = new Date();
+      const aptDate = new Date(apt.appointmentDate);
+      return aptDate < now || apt.status === "completed";
+    }).length,
+    pending: appointments.filter((apt) => apt.status === "pending").length,
+    confirmed: appointments.filter((apt) => apt.status === "confirmed").length,
+    completed: appointments.filter((apt) => apt.status === "completed").length,
+    cancelled: appointments.filter((apt) => apt.status === "cancelled").length,
+  };
 
   // Cancel appointment mutation
   const cancelAppointment = useMutation({
@@ -828,6 +964,175 @@ function AppointmentsList() {
     }
   };
 
+  // Render appointment alerts and details
+  const renderAppointmentAlerts = (appointment: any) => (
+    <>
+      {/* Show cancellation reason if requested by doctor */}
+      {appointment.status === "cancellation_requested" &&
+        appointment.cancellationReason && (
+          <div className="rounded-md bg-orange-50 dark:bg-orange-950/20 p-2 border border-orange-200 dark:border-orange-800">
+            <p className="text-xs font-medium text-orange-900 dark:text-orange-100 mb-1">
+              Cancellation Requested by Doctor
+            </p>
+            <p className="text-xs text-orange-700 dark:text-orange-300">
+              {appointment.cancellationReason}
+            </p>
+          </div>
+        )}
+
+      {/* Show completion details */}
+      {appointment.status === "completed" && appointment.completedAt && (
+        <div className="rounded-md bg-green-50 dark:bg-green-950/20 p-2 border border-green-200 dark:border-green-800">
+          <p className="text-xs font-medium text-green-900 dark:text-green-100 mb-1">
+            Appointment Completed
+          </p>
+          <p className="text-xs text-green-700 dark:text-green-300">
+            Completed on{" "}
+            {format(new Date(appointment.completedAt), "PPP 'at' p")}
+          </p>
+          {appointment.actualVisitTime && (
+            <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+              Patient seen at {appointment.actualVisitTime}
+            </p>
+          )}
+          {appointment.completionNotes && (
+            <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+              Notes: {appointment.completionNotes}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Show cancelled message */}
+      {appointment.status === "cancelled" && appointment.cancellationReason && (
+        <div className="rounded-md bg-red-50 dark:bg-red-950/20 p-2 border border-red-200 dark:border-red-800">
+          <p className="text-xs font-medium text-red-900 dark:text-red-100 mb-1">
+            Cancelled by{" "}
+            {appointment.cancelledBy
+              ? appointment.cancelledBy.charAt(0).toUpperCase() +
+                appointment.cancelledBy.slice(1)
+              : "Doctor"}
+          </p>
+          <p className="text-xs text-red-700 dark:text-red-300">
+            Reason: {appointment.cancellationReason}
+          </p>
+        </div>
+      )}
+
+      {/* Show rejection reason */}
+      {appointment.status === "confirmed" &&
+        appointment.cancellationRejectedReason &&
+        user?.role === "doctor" && (
+          <div className="rounded-md bg-yellow-50 dark:bg-yellow-950/20 p-2 border border-yellow-200 dark:border-yellow-800">
+            <p className="text-xs font-medium text-yellow-900 dark:text-yellow-100 mb-1">
+              Cancellation Request Rejected by Admin
+            </p>
+            <p className="text-xs text-yellow-700 dark:text-yellow-300">
+              {appointment.cancellationRejectedReason}
+            </p>
+            <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1 italic">
+              You can request cancellation again if needed.
+            </p>
+          </div>
+        )}
+    </>
+  );
+
+  // Render appointment action buttons
+  const renderAppointmentActions = (appointment: any) => (
+    <div className="flex gap-2 pt-2">
+      {/* Doctor/Admin can approve pending appointments */}
+      {appointment.status === "pending" &&
+        (user?.role === "doctor" || user?.role === "admin") && (
+          <Button
+            size="sm"
+            variant="default"
+            className="flex-1 bg-green-600 hover:bg-green-700"
+            onClick={() => openApproveDialog(appointment)}
+            data-testid={`button-approve-${appointment.id}`}
+          >
+            <Check className="w-4 h-4 mr-2" />
+            Approve
+          </Button>
+        )}
+      {/* Doctor/Admin can complete confirmed appointments */}
+      {appointment.status === "confirmed" &&
+        (user?.role === "doctor" || user?.role === "admin") && (
+          <Button
+            size="sm"
+            variant="default"
+            className="flex-1 bg-blue-600 hover:bg-blue-700 h-8 text-xs"
+            onClick={() => handleCompleteClick(appointment)}
+            data-testid={`button-complete-${appointment.id}`}
+          >
+            <Check className="w-3.5 h-3.5 mr-1.5" />
+            Mark Complete
+          </Button>
+        )}
+      {/* Patient actions */}
+      {appointment.status !== "completed" &&
+        appointment.status !== "cancelled" &&
+        appointment.status !== "cancellation_requested" &&
+        user?.role === "patient" && (
+          <Button
+            size="sm"
+            variant="destructive"
+            className="w-full h-8 text-xs"
+            onClick={() => openPatientCancelDialog(appointment)}
+            data-testid={`button-cancel-${appointment.id}`}
+          >
+            Cancel Appointment
+          </Button>
+        )}
+      {/* Doctor can request cancellation */}
+      {(appointment.status === "pending" ||
+        appointment.status === "confirmed") &&
+        user?.role === "doctor" && (
+          <Button
+            size="sm"
+            variant="destructive"
+            className="flex-1 h-8 text-xs"
+            onClick={() => openCancelRequestDialog(appointment)}
+            data-testid={`button-request-cancel-${appointment.id}`}
+          >
+            Request Cancel
+          </Button>
+        )}
+      {/* Admin can approve/reject cancellation requests */}
+      {appointment.status === "cancellation_requested" &&
+        user?.role === "admin" && (
+          <>
+            <Button
+              size="sm"
+              variant="destructive"
+              className="flex-1"
+              onClick={() => {
+                if (window.confirm("Approve this cancellation request?")) {
+                  approveCancellation.mutate(appointment.id);
+                }
+              }}
+              disabled={approveCancellation.isPending}
+              data-testid={`button-approve-cancel-${appointment.id}`}
+            >
+              {approveCancellation.isPending
+                ? "Approving..."
+                : "Approve Cancellation"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="flex-1"
+              onClick={() => openRejectDialog(appointment)}
+              disabled={rejectCancellation.isPending}
+              data-testid={`button-reject-cancel-${appointment.id}`}
+            >
+              Reject Request
+            </Button>
+          </>
+        )}
+    </div>
+  );
+
   if (isLoading) {
     return (
       <div className="text-center py-12">
@@ -856,293 +1161,694 @@ function AppointmentsList() {
     );
   }
 
-  return (
-    <>
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {appointments.map((appointment) => (
-          <Card
-            key={appointment.id}
-            className="hover-elevate transition-all duration-200"
+  // Render filter and search UI
+  const renderFilters = () => (
+    <div className="space-y-4">
+      {/* Search Bar */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Input
+          placeholder="Search by doctor, specialty, or reason..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="pl-10"
+        />
+      </div>
+
+      {/* Category Tabs */}
+      <div className="flex flex-wrap gap-2">
+        {[
+          { key: "all", label: "All", count: categoryCounts.all },
+          {
+            key: "upcoming",
+            label: "Upcoming",
+            count: categoryCounts.upcoming,
+          },
+          { key: "pending", label: "Pending", count: categoryCounts.pending },
+          {
+            key: "confirmed",
+            label: "Confirmed",
+            count: categoryCounts.confirmed,
+          },
+          {
+            key: "completed",
+            label: "Completed",
+            count: categoryCounts.completed,
+          },
+          {
+            key: "cancelled",
+            label: "Cancelled",
+            count: categoryCounts.cancelled,
+          },
+          { key: "past", label: "Past", count: categoryCounts.past },
+        ].map((category) => (
+          <Button
+            key={category.key}
+            variant={selectedCategory === category.key ? "default" : "outline"}
+            size="sm"
+            onClick={() => setSelectedCategory(category.key)}
+            className="gap-2"
           >
-            <CardHeader className="pb-3">
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex-1 min-w-0">
-                  <CardTitle className="text-lg truncate">
-                    {appointment.doctorName}
-                  </CardTitle>
-                  <p className="text-sm text-muted-foreground">
-                    {appointment.specialty}
-                  </p>
-                </div>
-                <Badge className={getStatusColor(appointment.status)}>
-                  {getStatusLabel(appointment.status)}
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex items-center gap-2 text-sm text-foreground">
-                <Calendar className="w-4 h-4 text-muted-foreground" />
-                <span>
-                  {format(
-                    new Date(appointment.appointmentDate),
-                    "MMM dd, yyyy"
-                  )}
-                </span>
-              </div>
-              <div className="flex items-center gap-2 text-sm text-foreground">
-                <Clock className="w-4 h-4 text-muted-foreground" />
-                <span>
-                  {appointment.status === "cancelled"
-                    ? "--"
-                    : appointment.status === "completed" &&
-                      appointment.actualVisitTime
-                    ? `Completed at ${appointment.actualVisitTime}`
-                    : appointment.appointmentTime
-                    ? appointment.appointmentTime
-                    : format(new Date(appointment.appointmentDate), "hh:mm a")}
-                </span>
-              </div>
-              {appointment.reason && (
-                <div className="flex items-start gap-2 text-sm text-muted-foreground">
-                  <User className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                  <span className="line-clamp-2">{appointment.reason}</span>
-                </div>
-              )}
-
-              {/* Show cancellation reason if requested by doctor */}
-              {appointment.status === "cancellation_requested" &&
-                appointment.cancellationReason && (
-                  <div className="rounded-md bg-orange-50 dark:bg-orange-950/20 p-2 border border-orange-200 dark:border-orange-800">
-                    <p className="text-xs font-medium text-orange-900 dark:text-orange-100 mb-1">
-                      Cancellation Requested by Doctor
-                    </p>
-                    <p className="text-xs text-orange-700 dark:text-orange-300">
-                      {appointment.cancellationReason}
-                    </p>
-                  </div>
-                )}
-
-              {/* Show completion details */}
-              {appointment.status === "completed" &&
-                appointment.completedAt && (
-                  <div className="rounded-md bg-green-50 dark:bg-green-950/20 p-2 border border-green-200 dark:border-green-800">
-                    <p className="text-xs font-medium text-green-900 dark:text-green-100 mb-1">
-                      Appointment Completed
-                    </p>
-                    <p className="text-xs text-green-700 dark:text-green-300">
-                      Completed on{" "}
-                      {format(new Date(appointment.completedAt), "PPP 'at' p")}
-                    </p>
-                    {appointment.actualVisitTime && (
-                      <p className="text-xs text-green-600 dark:text-green-400 mt-1">
-                        Patient seen at {appointment.actualVisitTime}
-                      </p>
-                    )}
-                    {appointment.completionNotes && (
-                      <p className="text-xs text-green-600 dark:text-green-400 mt-1">
-                        Notes: {appointment.completionNotes}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-              {/* Show cancelled message with who cancelled */}
-              {appointment.status === "cancelled" &&
-                appointment.cancellationReason && (
-                  <div className="rounded-md bg-red-50 dark:bg-red-950/20 p-2 border border-red-200 dark:border-red-800">
-                    <p className="text-xs font-medium text-red-900 dark:text-red-100 mb-1">
-                      Cancelled by{" "}
-                      {appointment.cancelledBy
-                        ? appointment.cancelledBy.charAt(0).toUpperCase() +
-                          appointment.cancelledBy.slice(1)
-                        : "Doctor"}
-                    </p>
-                    <p className="text-xs text-red-700 dark:text-red-300">
-                      Reason: {appointment.cancellationReason}
-                    </p>
-                  </div>
-                )}
-
-              {/* Show rejection reason if cancellation request was rejected by admin */}
-              {appointment.status === "confirmed" &&
-                appointment.cancellationRejectedReason &&
-                user?.role === "doctor" && (
-                  <div className="rounded-md bg-yellow-50 dark:bg-yellow-950/20 p-2 border border-yellow-200 dark:border-yellow-800">
-                    <p className="text-xs font-medium text-yellow-900 dark:text-yellow-100 mb-1">
-                      Cancellation Request Rejected by Admin
-                    </p>
-                    <p className="text-xs text-yellow-700 dark:text-yellow-300">
-                      {appointment.cancellationRejectedReason}
-                    </p>
-                    <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1 italic">
-                      You can request cancellation again if needed.
-                    </p>
-                  </div>
-                )}
-
-              <div className="flex gap-2 pt-2">
-                {/* Doctor/Admin can approve pending appointments */}
-                {appointment.status === "pending" &&
-                  (user?.role === "doctor" || user?.role === "admin") && (
-                    <Button
-                      size="sm"
-                      variant="default"
-                      className="flex-1 bg-green-600 hover:bg-green-700"
-                      onClick={() => openApproveDialog(appointment)}
-                      data-testid={`button-approve-${appointment.id}`}
-                    >
-                      <Check className="w-4 h-4 mr-2" />
-                      Approve
-                    </Button>
-                  )}
-                {/* Doctor/Admin can complete confirmed appointments */}
-                {appointment.status === "confirmed" &&
-                  (user?.role === "doctor" || user?.role === "admin") && (
-                    <Button
-                      size="sm"
-                      variant="default"
-                      className="flex-1 bg-blue-600 hover:bg-blue-700"
-                      onClick={() => handleCompleteClick(appointment)}
-                      data-testid={`button-complete-${appointment.id}`}
-                    >
-                      <Check className="w-4 h-4 mr-2" />
-                      Mark as Complete
-                    </Button>
-                  )}
-                {/* Patient actions - Only cancel with reason */}
-                {appointment.status !== "completed" &&
-                  appointment.status !== "cancelled" &&
-                  appointment.status !== "cancellation_requested" &&
-                  user?.role === "patient" && (
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      className="w-full"
-                      onClick={() => openPatientCancelDialog(appointment)}
-                      data-testid={`button-cancel-${appointment.id}`}
-                    >
-                      Cancel Appointment
-                    </Button>
-                  )}
-
-                {/* Doctor can request cancellation for pending/confirmed appointments */}
-                {(appointment.status === "pending" ||
-                  appointment.status === "confirmed") &&
-                  user?.role === "doctor" && (
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      className="flex-1"
-                      onClick={() => openCancelRequestDialog(appointment)}
-                      data-testid={`button-request-cancel-${appointment.id}`}
-                    >
-                      Request Cancellation
-                    </Button>
-                  )}
-
-                {/* Admin can approve or reject cancellation requests */}
-                {appointment.status === "cancellation_requested" &&
-                  user?.role === "admin" && (
-                    <>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        className="flex-1"
-                        onClick={() => {
-                          if (
-                            window.confirm("Approve this cancellation request?")
-                          ) {
-                            approveCancellation.mutate(appointment.id);
-                          }
-                        }}
-                        disabled={approveCancellation.isPending}
-                        data-testid={`button-approve-cancel-${appointment.id}`}
-                      >
-                        {approveCancellation.isPending
-                          ? "Approving..."
-                          : "Approve Cancellation"}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="flex-1"
-                        onClick={() => openRejectDialog(appointment)}
-                        disabled={rejectCancellation.isPending}
-                        data-testid={`button-reject-cancel-${appointment.id}`}
-                      >
-                        Reject Request
-                      </Button>
-                    </>
-                  )}
-
-                {appointment.status === "completed" && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="w-full"
-                    onClick={() => {
-                      const details = [
-                        `Scheduled: ${format(
-                          new Date(appointment.appointmentDate),
-                          "PPP"
-                        )} at ${appointment.appointmentTime || "N/A"}`,
-                        appointment.actualVisitTime
-                          ? `Actual visit: ${appointment.actualVisitTime}`
-                          : null,
-                        appointment.completedAt
-                          ? `Completed: ${format(
-                              new Date(appointment.completedAt),
-                              "PPP 'at' p"
-                            )}`
-                          : null,
-                        appointment.completionNotes
-                          ? `Notes: ${appointment.completionNotes}`
-                          : null,
-                      ]
-                        .filter(Boolean)
-                        .join("\n");
-
-                      toast({
-                        title: "Appointment Details",
-                        description: details,
-                      });
-                    }}
-                    data-testid={`button-view-${appointment.id}`}
-                  >
-                    View Details
-                  </Button>
-                )}
-                {/* Doctor/Admin can delete cancelled appointments after 24 hours */}
-                {appointment.status === "cancelled" &&
-                  canDelete(appointment) &&
-                  (user?.role === "doctor" || user?.role === "admin") && (
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      className="w-full"
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            "Are you sure you want to permanently delete this cancelled appointment?"
-                          )
-                        ) {
-                          deleteAppointment.mutate(appointment.id);
-                        }
-                      }}
-                      disabled={deleteAppointment.isPending}
-                      data-testid={`button-delete-${appointment.id}`}
-                    >
-                      <Trash2 className="w-4 h-4 mr-2" />
-                      {deleteAppointment.isPending
-                        ? "Deleting..."
-                        : "Delete Permanently"}
-                    </Button>
-                  )}
-              </div>
-            </CardContent>
-          </Card>
+            {category.label}
+            <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-xs">
+              {category.count}
+            </Badge>
+          </Button>
         ))}
       </div>
+
+      {/* Advanced Filters */}
+      <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowFilters(!showFilters)}
+          className="gap-2"
+        >
+          <SlidersHorizontal className="h-4 w-4" />
+          {showFilters ? "Hide Filters" : "More Filters"}
+        </Button>
+        {(searchQuery ||
+          selectedCategory !== "all" ||
+          dateFilter.from ||
+          dateFilter.to) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setSearchQuery("");
+              setSelectedCategory("all");
+              setDateFilter({ from: "", to: "" });
+            }}
+          >
+            Clear All
+          </Button>
+        )}
+      </div>
+
+      {/* Collapsible Advanced Filters */}
+      {showFilters && (
+        <Card>
+          <CardContent className="pt-6 space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <Label htmlFor="date-from" className="mb-2 block">
+                  From Date
+                </Label>
+                <Input
+                  id="date-from"
+                  type="date"
+                  value={dateFilter.from}
+                  onChange={(e) =>
+                    setDateFilter({ ...dateFilter, from: e.target.value })
+                  }
+                />
+              </div>
+              <div>
+                <Label htmlFor="date-to" className="mb-2 block">
+                  To Date
+                </Label>
+                <Input
+                  id="date-to"
+                  type="date"
+                  value={dateFilter.to}
+                  onChange={(e) =>
+                    setDateFilter({ ...dateFilter, to: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="sort-by" className="mb-2 block">
+                Sort By
+              </Label>
+              <Select
+                value={sortBy}
+                onValueChange={(value: "booking" | "appointment") =>
+                  setSortBy(value)
+                }
+              >
+                <SelectTrigger id="sort-by">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="appointment">Appointment Date</SelectItem>
+                  <SelectItem value="booking">Booking Date</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Results Summary */}
+      <div className="text-sm text-muted-foreground">
+        Showing {sortedAppointments.length} of {appointments.length}{" "}
+        appointments
+        {sortBy === "booking" && " (sorted by booking date)"}
+        {sortBy === "appointment" && " (sorted by appointment date)"}
+      </div>
+    </div>
+  );
+
+  // Group appointments by availability for doctors
+  const groupedAppointments =
+    user?.role === "doctor"
+      ? sortedAppointments.reduce((groups: any, appointment) => {
+          const key = appointment.availabilityId || "no-availability";
+          if (!groups[key]) {
+            groups[key] = {
+              availability: appointment.availability,
+              appointments: [],
+            };
+          }
+          groups[key].appointments.push(appointment);
+          return groups;
+        }, {})
+      : null;
+
+  return (
+    <>
+      {/* Filters and Search */}
+      {renderFilters()}
+
+      {/* No Results Message */}
+      {sortedAppointments.length === 0 ? (
+        <Card className="mt-4">
+          <CardContent className="py-12">
+            <div className="text-center space-y-3">
+              <Filter className="w-12 h-12 mx-auto text-muted-foreground" />
+              <div>
+                <h3 className="text-lg font-semibold">No Appointments Found</h3>
+                <p className="text-sm text-muted-foreground">
+                  Try adjusting your filters or search query
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : user?.role === "doctor" && groupedAppointments ? (
+        <div className="space-y-6">
+          {Object.entries(groupedAppointments).map(
+            ([key, group]: [string, any]) => (
+              <div key={key} className="space-y-3">
+                {/* Availability Header */}
+                {group.availability && (
+                  <Card className="bg-muted/50">
+                    <CardHeader className="pb-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1">
+                          <CardTitle className="text-lg flex items-center gap-2">
+                            <MapPin className="h-5 w-5 text-primary" />
+                            {group.availability.locationName}
+                          </CardTitle>
+                          <p className="text-sm text-muted-foreground mt-1">
+                            {group.availability.locationAddress}
+                          </p>
+                          <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
+                            <div className="flex items-center gap-1">
+                              <Calendar className="h-4 w-4" />
+                              {format(
+                                new Date(group.availability.availableDate),
+                                "MMM dd, yyyy"
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <Clock className="h-4 w-4" />
+                              {group.availability.startTime} -{" "}
+                              {group.availability.endTime}
+                            </div>
+                            <Badge variant="outline">
+                              {group.appointments.length}{" "}
+                              {group.appointments.length === 1
+                                ? "Appointment"
+                                : "Appointments"}
+                            </Badge>
+                          </div>
+                        </div>
+                      </div>
+                    </CardHeader>
+                  </Card>
+                )}
+
+                {/* Appointments Grid - Group by date */}
+                {(() => {
+                  const appointmentsByDate = groupAppointmentsByDate(
+                    group.appointments
+                  );
+                  const appointmentDateKeys = Object.keys(appointmentsByDate)
+                    .sort()
+                    .reverse();
+
+                  return (
+                    <div className="space-y-4">
+                      {appointmentDateKeys.map((dateKey) => (
+                        <div key={dateKey} className="space-y-2">
+                          {/* Date Separator for grouped appointments */}
+                          <div className="flex items-center gap-3">
+                            <div className="h-px bg-border flex-1"></div>
+                            <div className="text-xs font-medium text-muted-foreground px-2">
+                              {format(
+                                new Date(dateKey),
+                                sortBy === "booking"
+                                  ? "'Booked' MMM dd"
+                                  : "MMM dd"
+                              )}
+                            </div>
+                            <div className="h-px bg-border flex-1"></div>
+                          </div>
+
+                          {/* Appointments for this date */}
+                          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                            {appointmentsByDate[dateKey].map(
+                              (appointment: any) => (
+                                <Card
+                                  key={appointment.id}
+                                  className="hover-elevate transition-all duration-200"
+                                >
+                                  <CardHeader className="pb-3">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="flex-1 min-w-0">
+                                        <CardTitle className="text-lg truncate">
+                                          {appointment.patientName}
+                                        </CardTitle>
+                                        <p className="text-sm text-muted-foreground">
+                                          Patient
+                                        </p>
+                                      </div>
+                                      <Badge
+                                        className={getStatusColor(
+                                          appointment.status
+                                        )}
+                                      >
+                                        {getStatusLabel(appointment.status)}
+                                      </Badge>
+                                    </div>
+                                  </CardHeader>
+                                  <CardContent className="space-y-3">
+                                    <div className="space-y-2">
+                                      <div className="flex items-center gap-2 text-sm text-foreground">
+                                        <Calendar className="w-4 h-4 text-muted-foreground" />
+                                        <span>
+                                          {format(
+                                            new Date(
+                                              appointment.appointmentDate
+                                            ),
+                                            "MMM dd, yyyy"
+                                          )}
+                                        </span>
+                                      </div>
+                                      {appointment.createdAt && (
+                                        <div className="text-xs text-muted-foreground">
+                                          Booked on{" "}
+                                          {format(
+                                            new Date(appointment.createdAt),
+                                            "MMM dd, yyyy 'at' h:mm a"
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-2 text-sm text-foreground">
+                                      <Clock className="w-4 h-4 text-muted-foreground" />
+                                      <span>
+                                        {appointment.status === "cancelled"
+                                          ? "--"
+                                          : appointment.status ===
+                                              "completed" &&
+                                            appointment.actualVisitTime
+                                          ? `Completed at ${appointment.actualVisitTime}`
+                                          : appointment.appointmentTime
+                                          ? appointment.appointmentTime
+                                          : format(
+                                              new Date(
+                                                appointment.appointmentDate
+                                              ),
+                                              "hh:mm a"
+                                            )}
+                                      </span>
+                                    </div>
+                                    {appointment.reason && (
+                                      <div className="flex items-start gap-2 text-sm text-muted-foreground">
+                                        <User className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                                        <span className="line-clamp-2">
+                                          {appointment.reason}
+                                        </span>
+                                      </div>
+                                    )}
+                                    {renderAppointmentAlerts(appointment)}
+                                    {renderAppointmentActions(appointment)}
+                                  </CardContent>
+                                </Card>
+                              )
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            )
+          )}
+        </div>
+      ) : (
+        <div className="space-y-6 mt-4">
+          {dateKeys.map((dateKey) => (
+            <div key={dateKey} className="space-y-3">
+              {/* Date Separator */}
+              <div className="flex items-center gap-3">
+                <div className="h-px bg-border flex-1"></div>
+                <div className="text-sm font-semibold text-foreground px-3 py-1 bg-muted rounded-full">
+                  {format(
+                    new Date(dateKey),
+                    sortBy === "booking"
+                      ? "'Booked on' MMMM dd, yyyy"
+                      : "MMMM dd, yyyy"
+                  )}
+                </div>
+                <div className="h-px bg-border flex-1"></div>
+              </div>
+
+              {/* Appointments Grid */}
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {groupedByDate[dateKey].map((appointment) => (
+                  <Card
+                    key={appointment.id}
+                    className="hover-elevate transition-all duration-200"
+                  >
+                    <CardHeader className="pb-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <CardTitle className="text-lg truncate">
+                            {appointment.doctorName}
+                          </CardTitle>
+                          <p className="text-sm text-muted-foreground">
+                            {appointment.specialty}
+                          </p>
+                        </div>
+                        <Badge className={getStatusColor(appointment.status)}>
+                          {getStatusLabel(appointment.status)}
+                        </Badge>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-sm text-foreground">
+                          <Calendar className="w-4 h-4 text-muted-foreground" />
+                          <span>
+                            {format(
+                              new Date(appointment.appointmentDate),
+                              "MMM dd, yyyy"
+                            )}
+                          </span>
+                        </div>
+                        {appointment.createdAt && (
+                          <div className="text-xs text-muted-foreground">
+                            Booked on{" "}
+                            {format(
+                              new Date(appointment.createdAt),
+                              "MMM dd, yyyy 'at' h:mm a"
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-sm text-foreground">
+                        <Clock className="w-4 h-4 text-muted-foreground" />
+                        <span>
+                          {appointment.status === "cancelled"
+                            ? "--"
+                            : appointment.status === "completed" &&
+                              appointment.actualVisitTime
+                            ? `Completed at ${appointment.actualVisitTime}`
+                            : appointment.appointmentTime
+                            ? appointment.appointmentTime
+                            : format(
+                                new Date(appointment.appointmentDate),
+                                "hh:mm a"
+                              )}
+                        </span>
+                      </div>
+                      {appointment.reason && (
+                        <div className="flex items-start gap-2 text-sm text-muted-foreground">
+                          <User className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                          <span className="line-clamp-2">
+                            {appointment.reason}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Show cancellation reason if requested by doctor */}
+                      {appointment.status === "cancellation_requested" &&
+                        appointment.cancellationReason && (
+                          <div className="rounded-md bg-orange-50 dark:bg-orange-950/20 p-2 border border-orange-200 dark:border-orange-800">
+                            <p className="text-xs font-medium text-orange-900 dark:text-orange-100 mb-1">
+                              Cancellation Requested by Doctor
+                            </p>
+                            <p className="text-xs text-orange-700 dark:text-orange-300">
+                              {appointment.cancellationReason}
+                            </p>
+                          </div>
+                        )}
+
+                      {/* Show completion details */}
+                      {appointment.status === "completed" &&
+                        appointment.completedAt && (
+                          <div className="rounded-md bg-green-50 dark:bg-green-950/20 p-2 border border-green-200 dark:border-green-800">
+                            <p className="text-xs font-medium text-green-900 dark:text-green-100 mb-1">
+                              Appointment Completed
+                            </p>
+                            <p className="text-xs text-green-700 dark:text-green-300">
+                              Completed on{" "}
+                              {format(
+                                new Date(appointment.completedAt),
+                                "PPP 'at' p"
+                              )}
+                            </p>
+                            {appointment.actualVisitTime && (
+                              <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                                Patient seen at {appointment.actualVisitTime}
+                              </p>
+                            )}
+                            {appointment.completionNotes && (
+                              <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                                Notes: {appointment.completionNotes}
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                      {/* Show cancelled message with who cancelled */}
+                      {appointment.status === "cancelled" &&
+                        appointment.cancellationReason && (
+                          <div className="rounded-md bg-red-50 dark:bg-red-950/20 p-2 border border-red-200 dark:border-red-800">
+                            <p className="text-xs font-medium text-red-900 dark:text-red-100 mb-1">
+                              Cancelled by{" "}
+                              {appointment.cancelledBy
+                                ? appointment.cancelledBy
+                                    .charAt(0)
+                                    .toUpperCase() +
+                                  appointment.cancelledBy.slice(1)
+                                : "Doctor"}
+                            </p>
+                            <p className="text-xs text-red-700 dark:text-red-300">
+                              Reason: {appointment.cancellationReason}
+                            </p>
+                          </div>
+                        )}
+
+                      {/* Show rejection reason if cancellation request was rejected by admin */}
+                      {appointment.status === "confirmed" &&
+                        appointment.cancellationRejectedReason &&
+                        user?.role === "doctor" && (
+                          <div className="rounded-md bg-yellow-50 dark:bg-yellow-950/20 p-2 border border-yellow-200 dark:border-yellow-800">
+                            <p className="text-xs font-medium text-yellow-900 dark:text-yellow-100 mb-1">
+                              Cancellation Request Rejected by Admin
+                            </p>
+                            <p className="text-xs text-yellow-700 dark:text-yellow-300">
+                              {appointment.cancellationRejectedReason}
+                            </p>
+                            <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1 italic">
+                              You can request cancellation again if needed.
+                            </p>
+                          </div>
+                        )}
+
+                      <div className="flex gap-2 pt-2">
+                        {/* Doctor/Admin can approve pending appointments */}
+                        {appointment.status === "pending" &&
+                          (user?.role === "doctor" ||
+                            user?.role === "admin") && (
+                            <Button
+                              size="sm"
+                              variant="default"
+                              className="flex-1 bg-green-600 hover:bg-green-700"
+                              onClick={() => openApproveDialog(appointment)}
+                              data-testid={`button-approve-${appointment.id}`}
+                            >
+                              <Check className="w-4 h-4 mr-2" />
+                              Approve
+                            </Button>
+                          )}
+                        {/* Doctor/Admin can complete confirmed appointments */}
+                        {appointment.status === "confirmed" &&
+                          (user?.role === "doctor" ||
+                            user?.role === "admin") && (
+                            <Button
+                              size="sm"
+                              variant="default"
+                              className="flex-1 bg-blue-600 hover:bg-blue-700"
+                              onClick={() => handleCompleteClick(appointment)}
+                              data-testid={`button-complete-${appointment.id}`}
+                            >
+                              <Check className="w-4 h-4 mr-2" />
+                              Mark as Complete
+                            </Button>
+                          )}
+                        {/* Patient actions - Only cancel with reason */}
+                        {appointment.status !== "completed" &&
+                          appointment.status !== "cancelled" &&
+                          appointment.status !== "cancellation_requested" &&
+                          user?.role === "patient" && (
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              className="w-full"
+                              onClick={() =>
+                                openPatientCancelDialog(appointment)
+                              }
+                              data-testid={`button-cancel-${appointment.id}`}
+                            >
+                              Cancel Appointment
+                            </Button>
+                          )}
+
+                        {/* Doctor can request cancellation for pending/confirmed appointments */}
+                        {(appointment.status === "pending" ||
+                          appointment.status === "confirmed") &&
+                          user?.role === "doctor" && (
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              className="flex-1"
+                              onClick={() =>
+                                openCancelRequestDialog(appointment)
+                              }
+                              data-testid={`button-request-cancel-${appointment.id}`}
+                            >
+                              Request Cancellation
+                            </Button>
+                          )}
+
+                        {/* Admin can approve or reject cancellation requests */}
+                        {appointment.status === "cancellation_requested" &&
+                          user?.role === "admin" && (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                className="flex-1"
+                                onClick={() => {
+                                  if (
+                                    window.confirm(
+                                      "Approve this cancellation request?"
+                                    )
+                                  ) {
+                                    approveCancellation.mutate(appointment.id);
+                                  }
+                                }}
+                                disabled={approveCancellation.isPending}
+                                data-testid={`button-approve-cancel-${appointment.id}`}
+                              >
+                                {approveCancellation.isPending
+                                  ? "Approving..."
+                                  : "Approve Cancellation"}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="flex-1"
+                                onClick={() => openRejectDialog(appointment)}
+                                disabled={rejectCancellation.isPending}
+                                data-testid={`button-reject-cancel-${appointment.id}`}
+                              >
+                                Reject Request
+                              </Button>
+                            </>
+                          )}
+
+                        {appointment.status === "completed" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="w-full"
+                            onClick={() => {
+                              const details = [
+                                `Scheduled: ${format(
+                                  new Date(appointment.appointmentDate),
+                                  "PPP"
+                                )} at ${appointment.appointmentTime || "N/A"}`,
+                                appointment.actualVisitTime
+                                  ? `Actual visit: ${appointment.actualVisitTime}`
+                                  : null,
+                                appointment.completedAt
+                                  ? `Completed: ${format(
+                                      new Date(appointment.completedAt),
+                                      "PPP 'at' p"
+                                    )}`
+                                  : null,
+                                appointment.completionNotes
+                                  ? `Notes: ${appointment.completionNotes}`
+                                  : null,
+                              ]
+                                .filter(Boolean)
+                                .join("\n");
+
+                              toast({
+                                title: "Appointment Details",
+                                description: details,
+                              });
+                            }}
+                            data-testid={`button-view-${appointment.id}`}
+                          >
+                            View Details
+                          </Button>
+                        )}
+                        {/* Doctor/Admin can delete cancelled appointments after 24 hours */}
+                        {appointment.status === "cancelled" &&
+                          canDelete(appointment) &&
+                          (user?.role === "doctor" ||
+                            user?.role === "admin") && (
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              className="w-full"
+                              onClick={() => {
+                                if (
+                                  window.confirm(
+                                    "Are you sure you want to permanently delete this cancelled appointment?"
+                                  )
+                                ) {
+                                  deleteAppointment.mutate(appointment.id);
+                                }
+                              }}
+                              disabled={deleteAppointment.isPending}
+                              data-testid={`button-delete-${appointment.id}`}
+                            >
+                              <Trash2 className="w-4 h-4 mr-2" />
+                              {deleteAppointment.isPending
+                                ? "Deleting..."
+                                : "Delete Permanently"}
+                            </Button>
+                          )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Approve Appointment Dialog */}
       <Dialog
@@ -1912,6 +2618,15 @@ function AppointmentsTable() {
   const { user } = useAuth();
   const [filterStatus, setFilterStatus] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState<string>("all");
+  const [showFilters, setShowFilters] = useState(false);
+  const [dateFilter, setDateFilter] = useState<{ from: string; to: string }>({
+    from: "",
+    to: "",
+  });
+  const [sortBy, setSortBy] = useState<"booking" | "appointment">(
+    "appointment"
+  );
 
   // Completion dialog states
   const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
@@ -2139,23 +2854,110 @@ function AppointmentsTable() {
     }
   };
 
-  // Filter appointments by status and search
+  // Filter appointments with advanced filtering
   const filteredAppointments = appointments.filter((apt) => {
-    // Status filter
-    const statusMatch = filterStatus === "all" || apt.status === filterStatus;
-
     // Search filter
-    const searchLower = searchQuery.toLowerCase();
-    const searchMatch =
-      !searchQuery ||
-      apt.patientName?.toLowerCase().includes(searchLower) ||
-      apt.doctorName?.toLowerCase().includes(searchLower) ||
-      apt.specialization?.toLowerCase().includes(searchLower) ||
-      apt.specialty?.toLowerCase().includes(searchLower) ||
-      apt.reason?.toLowerCase().includes(searchLower);
+    if (searchQuery.trim()) {
+      const searchLower = searchQuery.toLowerCase();
+      const matchesSearch =
+        apt.patientName?.toLowerCase().includes(searchLower) ||
+        apt.doctorName?.toLowerCase().includes(searchLower) ||
+        apt.specialization?.toLowerCase().includes(searchLower) ||
+        apt.specialty?.toLowerCase().includes(searchLower) ||
+        apt.reason?.toLowerCase().includes(searchLower);
+      if (!matchesSearch) return false;
+    }
 
-    return statusMatch && searchMatch;
+    // Category filter
+    if (selectedCategory !== "all") {
+      const now = new Date();
+      const appointmentDate = new Date(apt.appointmentDate);
+
+      switch (selectedCategory) {
+        case "upcoming":
+          if (
+            apt.status === "cancelled" ||
+            apt.status === "completed" ||
+            appointmentDate < now
+          )
+            return false;
+          break;
+        case "past":
+          if (appointmentDate >= now && apt.status !== "completed")
+            return false;
+          break;
+        case "cancelled":
+          if (apt.status !== "cancelled") return false;
+          break;
+        case "completed":
+          if (apt.status !== "completed") return false;
+          break;
+        case "pending":
+          if (apt.status !== "pending") return false;
+          break;
+        case "confirmed":
+          if (apt.status !== "confirmed") return false;
+          break;
+      }
+    }
+
+    // Status filter (legacy - keep for backward compatibility)
+    if (filterStatus !== "all" && apt.status !== filterStatus) {
+      return false;
+    }
+
+    // Date range filter
+    if (dateFilter.from) {
+      const fromDate = new Date(dateFilter.from);
+      fromDate.setHours(0, 0, 0, 0);
+      const appointmentDate = new Date(apt.appointmentDate);
+      appointmentDate.setHours(0, 0, 0, 0);
+      if (appointmentDate < fromDate) return false;
+    }
+    if (dateFilter.to) {
+      const toDate = new Date(dateFilter.to);
+      toDate.setHours(23, 59, 59, 999);
+      const appointmentDate = new Date(apt.appointmentDate);
+      if (appointmentDate > toDate) return false;
+    }
+
+    return true;
   });
+
+  // Sort appointments - latest dates first
+  const sortedAppointments = [...filteredAppointments].sort((a, b) => {
+    if (sortBy === "booking") {
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    } else {
+      return (
+        new Date(b.appointmentDate).getTime() -
+        new Date(a.appointmentDate).getTime()
+      );
+    }
+  });
+
+  // Calculate category counts
+  const categoryCounts = {
+    all: appointments.length,
+    upcoming: appointments.filter((apt) => {
+      const now = new Date();
+      const aptDate = new Date(apt.appointmentDate);
+      return (
+        apt.status !== "cancelled" &&
+        apt.status !== "completed" &&
+        aptDate >= now
+      );
+    }).length,
+    past: appointments.filter((apt) => {
+      const now = new Date();
+      const aptDate = new Date(apt.appointmentDate);
+      return aptDate < now || apt.status === "completed";
+    }).length,
+    pending: appointments.filter((apt) => apt.status === "pending").length,
+    confirmed: appointments.filter((apt) => apt.status === "confirmed").length,
+    completed: appointments.filter((apt) => apt.status === "completed").length,
+    cancelled: appointments.filter((apt) => apt.status === "cancelled").length,
+  };
 
   if (isLoading) {
     return (
@@ -2172,56 +2974,232 @@ function AppointmentsTable() {
   return (
     <div className="space-y-4">
       {/* Search and Filters */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <Filter className="w-5 h-5" />
-            Search & Filters
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-col gap-4">
-            {/* Search Bar */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Search</label>
-              <Input
-                placeholder="Search by patient, doctor, RFID, or license..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="max-w-lg"
-              />
-            </div>
+      <div className="space-y-4">
+        {/* Search Bar */}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by patient, doctor, specialty, or reason..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10"
+          />
+        </div>
 
-            {/* Status Filter */}
-            <div className="flex gap-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Status</label>
-                <Select value={filterStatus} onValueChange={setFilterStatus}>
-                  <SelectTrigger className="w-[200px]">
-                    <SelectValue placeholder="All Statuses" />
+        {/* Category Tabs */}
+        <div className="flex flex-wrap gap-2">
+          {[
+            { key: "all", label: "All", count: categoryCounts.all },
+            {
+              key: "upcoming",
+              label: "Upcoming",
+              count: categoryCounts.upcoming,
+            },
+            { key: "pending", label: "Pending", count: categoryCounts.pending },
+            {
+              key: "confirmed",
+              label: "Confirmed",
+              count: categoryCounts.confirmed,
+            },
+            {
+              key: "completed",
+              label: "Completed",
+              count: categoryCounts.completed,
+            },
+            {
+              key: "cancelled",
+              label: "Cancelled",
+              count: categoryCounts.cancelled,
+            },
+            { key: "past", label: "Past", count: categoryCounts.past },
+          ].map((category) => (
+            <Button
+              key={category.key}
+              variant={
+                selectedCategory === category.key ? "default" : "outline"
+              }
+              size="sm"
+              onClick={() => setSelectedCategory(category.key)}
+              className="gap-2"
+            >
+              {category.label}
+              <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-xs">
+                {category.count}
+              </Badge>
+            </Button>
+          ))}
+        </div>
+
+        {/* Quick Date Filters */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-muted-foreground">
+            Quick Filters:
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const today = new Date().toISOString().split("T")[0];
+              setDateFilter({ from: today, to: today });
+            }}
+          >
+            Today
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const today = new Date();
+              const weekStart = new Date(today);
+              weekStart.setDate(today.getDate() - today.getDay());
+              const weekEnd = new Date(today);
+              weekEnd.setDate(today.getDate() + (6 - today.getDay()));
+              setDateFilter({
+                from: weekStart.toISOString().split("T")[0],
+                to: weekEnd.toISOString().split("T")[0],
+              });
+            }}
+          >
+            This Week
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const today = new Date();
+              const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+              const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+              setDateFilter({
+                from: monthStart.toISOString().split("T")[0],
+                to: monthEnd.toISOString().split("T")[0],
+              });
+            }}
+          >
+            This Month
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowFilters(!showFilters)}
+            className="gap-2"
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            Custom Date Range
+          </Button>
+        </div>
+
+        {/* Advanced Filters */}
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowFilters(!showFilters)}
+            className="gap-2"
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            {showFilters ? "Hide Advanced" : "More Filters"}
+          </Button>
+          {(searchQuery ||
+            selectedCategory !== "all" ||
+            dateFilter.from ||
+            dateFilter.to) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setSearchQuery("");
+                setSelectedCategory("all");
+                setDateFilter({ from: "", to: "" });
+              }}
+            >
+              Clear All
+            </Button>
+          )}
+          {(dateFilter.from || dateFilter.to) && (
+            <span className="text-sm text-muted-foreground">
+              {dateFilter.from && dateFilter.to
+                ? `${format(new Date(dateFilter.from), "MMM dd")} - ${format(
+                    new Date(dateFilter.to),
+                    "MMM dd, yyyy"
+                  )}`
+                : dateFilter.from
+                ? `From ${format(new Date(dateFilter.from), "MMM dd, yyyy")}`
+                : `Until ${format(new Date(dateFilter.to), "MMM dd, yyyy")}`}
+            </span>
+          )}
+        </div>
+
+        {/* Collapsible Advanced Filters */}
+        {showFilters && (
+          <Card>
+            <CardContent className="pt-6 space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <Label htmlFor="date-from-table" className="mb-2 block">
+                    From Date
+                  </Label>
+                  <Input
+                    id="date-from-table"
+                    type="date"
+                    value={dateFilter.from}
+                    onChange={(e) =>
+                      setDateFilter({ ...dateFilter, from: e.target.value })
+                    }
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="date-to-table" className="mb-2 block">
+                    To Date
+                  </Label>
+                  <Input
+                    id="date-to-table"
+                    type="date"
+                    value={dateFilter.to}
+                    onChange={(e) =>
+                      setDateFilter({ ...dateFilter, to: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+              <div>
+                <Label htmlFor="sort-by-table" className="mb-2 block">
+                  Sort By
+                </Label>
+                <Select
+                  value={sortBy}
+                  onValueChange={(value: "booking" | "appointment") =>
+                    setSortBy(value)
+                  }
+                >
+                  <SelectTrigger id="sort-by-table">
+                    <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All Statuses</SelectItem>
-                    <SelectItem value="pending">Pending</SelectItem>
-                    <SelectItem value="confirmed">Confirmed</SelectItem>
-                    <SelectItem value="completed">Completed</SelectItem>
-                    <SelectItem value="cancellation_requested">
-                      Cancellation Requested
+                    <SelectItem value="appointment">
+                      Appointment Date
                     </SelectItem>
-                    <SelectItem value="cancelled">Cancelled</SelectItem>
+                    <SelectItem value="booking">Booking Date</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Results Summary */}
+        <div className="text-sm text-muted-foreground">
+          Showing {sortedAppointments.length} of {appointments.length}{" "}
+          appointments
+          {sortBy === "booking" && " (sorted by booking date)"}
+          {sortBy === "appointment" && " (sorted by appointment date)"}
+        </div>
+      </div>
 
       {/* Table */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
-            <span>All Appointments ({filteredAppointments.length})</span>
+            <span>All Appointments ({sortedAppointments.length})</span>
             {appointments.length > 0 && (
               <span className="text-xs font-normal text-green-500">
                 ✓ Data loaded: {appointments[0]?.patientName || "ERROR"}
@@ -2234,7 +3212,8 @@ function AppointmentsTable() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[140px]">Date & Time</TableHead>
+                  <TableHead className="w-[140px]">Appointment Date</TableHead>
+                  <TableHead className="w-[140px]">Booked Date</TableHead>
                   <TableHead className="w-[180px]">Patient</TableHead>
                   <TableHead className="w-[180px]">Doctor</TableHead>
                   <TableHead className="w-[150px]">Specialization</TableHead>
@@ -2244,16 +3223,16 @@ function AppointmentsTable() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredAppointments.length === 0 ? (
+                {sortedAppointments.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-8">
+                    <TableCell colSpan={8} className="text-center py-8">
                       <div className="text-muted-foreground">
                         No appointments found
                       </div>
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredAppointments.map((appointment) => (
+                  sortedAppointments.map((appointment) => (
                     <TableRow key={appointment.id}>
                       <TableCell className="font-medium whitespace-nowrap">
                         <div>
@@ -2278,6 +3257,14 @@ function AppointmentsTable() {
                                   )
                                 : "Not set")}
                         </div>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+                        {appointment.createdAt
+                          ? format(
+                              new Date(appointment.createdAt),
+                              "MM/dd/yyyy h:mm a"
+                            )
+                          : "N/A"}
                       </TableCell>
                       <TableCell
                         className="font-medium"

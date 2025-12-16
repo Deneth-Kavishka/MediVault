@@ -62,6 +62,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -583,16 +588,35 @@ export default function AdminAppointments() {
               </SelectContent>
             </Select>
             <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                onClick={() => setDateFilter(undefined)}
-                disabled={!dateFilter}
-              >
-                <Filter className="h-4 w-4 mr-2" />
-                {dateFilter
-                  ? dateFilter.toLocaleDateString()
-                  : "Filter by Date"}
-              </Button>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline">
+                    <CalendarIcon className="h-4 w-4 mr-2" />
+                    {dateFilter
+                      ? dateFilter.toLocaleDateString()
+                      : "Filter by Date"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={dateFilter}
+                    onSelect={setDateFilter}
+                    initialFocus
+                  />
+                  {dateFilter && (
+                    <div className="p-3 border-t">
+                      <Button
+                        variant="outline"
+                        className="w-full"
+                        onClick={() => setDateFilter(undefined)}
+                      >
+                        Clear Filter
+                      </Button>
+                    </div>
+                  )}
+                </PopoverContent>
+              </Popover>
             </div>
           </div>
 

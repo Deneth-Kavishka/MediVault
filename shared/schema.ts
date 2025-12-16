@@ -154,11 +154,15 @@ export const doctorAvailability = pgTable("doctor_availability", {
     scale: 2,
   }).default("0.00"), // Fee for private hospitals only
   isActive: boolean("is_active").default(true).notNull(),
-  status: varchar("status").notNull().default("active"), // 'active' | 'inactive' | 'finished'
+  status: varchar("status").notNull().default("active"), // 'active' | 'inactive' | 'finished' | 'deleted'
   reactivationRequested: boolean("reactivation_requested")
     .default(false)
     .notNull(),
   reactivationRequestedAt: timestamp("reactivation_requested_at"),
+  deletedAt: timestamp("deleted_at"), // When doctor permanently deleted
+  deletedBy: varchar("deleted_by"), // 'doctor' | 'admin' - who deleted it
+  deactivatedBy: varchar("deactivated_by"), // 'admin' - who deactivated it
+  deactivatedAt: timestamp("deactivated_at"), // When admin deactivated it
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
