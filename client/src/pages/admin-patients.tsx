@@ -35,70 +35,65 @@ import {
 } from "@/components/ui/dialog";
 import {
   Search,
-  UserPlus,
-  FileText,
   Download,
   Activity,
-  Calendar,
+  FileText,
   Phone,
   MapPin,
-  Droplet,
-  AlertCircle,
+  ShieldAlert,
+  User,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 interface Patient {
   id: string;
   userId: string;
   nic: string;
-  healthId?: string;
-  rfid: string;
+  rfid: string; // Masked for admin
   dateOfBirth?: string;
   gender?: string;
   contactInfo?: string;
   address?: string;
-  bloodType?: string;
-  allergies?: string;
   createdAt: string;
-  user?: {
-    firstName?: string;
-    lastName?: string;
-    email?: string;
-    username: string;
-  };
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  isActive?: boolean;
 }
 
 export default function AdminPatients() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
-  const [bloodTypeFilter, setBloodTypeFilter] = useState<string>("all");
   const [genderFilter, setGenderFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
 
-  // Fetch patients
+  // Fetch patients (admin view - limited info only)
   const { data: patients, isLoading } = useQuery<Patient[]>({
     queryKey: ["/api/patients"],
   });
 
   // Filter patients
   const filteredPatients = patients?.filter((patient) => {
-    const fullName = `${patient.user?.firstName || ""} ${
-      patient.user?.lastName || ""
+    const fullName = `${patient.firstName || ""} ${
+      patient.lastName || ""
     }`.toLowerCase();
     const matchesSearch =
       fullName.includes(searchQuery.toLowerCase()) ||
       patient.nic.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      patient.rfid.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      patient.user?.email?.toLowerCase().includes(searchQuery.toLowerCase());
+      patient.email?.toLowerCase().includes(searchQuery.toLowerCase());
 
-    const matchesBloodType =
-      bloodTypeFilter === "all" || patient.bloodType === bloodTypeFilter;
     const matchesGender =
       genderFilter === "all" || patient.gender === genderFilter;
 
-    return matchesSearch && matchesBloodType && matchesGender;
+    const matchesStatus =
+      statusFilter === "all" ||
+      (statusFilter === "active" && patient.isActive) ||
+      (statusFilter === "inactive" && !patient.isActive);
+
+    return matchesSearch && matchesGender && matchesStatus;
   });
 
   const handleViewDetails = (patient: Patient) => {
@@ -116,26 +111,34 @@ export default function AdminPatients() {
       return;
     }
 
-    // Create CSV content
+    // Create CSV content (ADMIN VIEW - NO MEDICAL DATA)
     const headers = [
-      "Name",
+      "Patient ID",
+      "Full Name",
       "NIC",
-      "RFID",
-      "Email",
-      "Contact",
-      "Blood Type",
+      "Date of Birth",
       "Gender",
-      "Allergies",
+      "Email",
+      "Contact Number",
+      "Address",
+      "RFID (Masked)",
+      "Status",
+      "Registration Date",
     ];
     const rows = filteredPatients.map((p) => [
-      `${p.user?.firstName || ""} ${p.user?.lastName || ""}`,
+      p.id,
+      `${p.firstName || ""} ${p.lastName || ""}`,
       p.nic,
-      p.rfid,
-      p.user?.email || "",
+      p.dateOfBirth
+        ? new Date(p.dateOfBirth).toLocaleDateString()
+        : "Not provided",
+      p.gender || "Not specified",
+      p.email || "",
       p.contactInfo || "",
-      p.bloodType || "",
-      p.gender || "",
-      p.allergies || "None",
+      p.address || "",
+      p.rfid, // Already masked from backend
+      p.isActive ? "Active" : "Inactive",
+      new Date(p.createdAt).toLocaleDateString(),
     ]);
 
     const csvContent = [
@@ -189,9 +192,20 @@ export default function AdminPatients() {
           Patient Management
         </h1>
         <p className="text-muted-foreground">
-          Manage all registered patients with RFID tracking and medical records
+          View and manage patient registration and account status
         </p>
       </div>
+
+      {/* Privacy Notice */}
+      <Alert className="bg-blue-50 dark:bg-blue-950 border-blue-200 dark:border-blue-800">
+        <ShieldAlert className="h-4 w-4 text-blue-600" />
+        <AlertDescription className="text-blue-900 dark:text-blue-100">
+          <strong>Admin Access Notice:</strong> As an administrator, you have
+          access to basic patient information only. Medical records, lab
+          reports, prescriptions, and diagnosis history are restricted to
+          authorized medical personnel.
+        </AlertDescription>
+      </Alert>
 
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-4">
@@ -208,39 +222,43 @@ export default function AdminPatients() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Male Patients
+              Active Accounts
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
-              {patients?.filter((p) => p.gender === "male").length || 0}
+            <div className="text-2xl font-bold text-green-600">
+              {patients?.filter((p) => p.isActive).length || 0}
             </div>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Female Patients
+              Inactive Accounts
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
-              {patients?.filter((p) => p.gender === "female").length || 0}
+            <div className="text-2xl font-bold text-gray-500">
+              {patients?.filter((p) => !p.isActive).length || 0}
             </div>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              With Allergies
+              Registered This Month
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {patients?.filter(
-                (p) =>
-                  p.allergies && p.allergies !== "None" && p.allergies !== ""
-              ).length || 0}
+              {patients?.filter((p) => {
+                const createdDate = new Date(p.createdAt);
+                const now = new Date();
+                return (
+                  createdDate.getMonth() === now.getMonth() &&
+                  createdDate.getFullYear() === now.getFullYear()
+                );
+              }).length || 0}
             </div>
           </CardContent>
         </Card>
@@ -251,9 +269,9 @@ export default function AdminPatients() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <CardTitle>All Patients</CardTitle>
+              <CardTitle>Patient Registry</CardTitle>
               <CardDescription>
-                View and manage patient records with RFID tracking
+                Basic patient information and account management
               </CardDescription>
             </div>
             <Button onClick={handleExport} variant="outline">
@@ -268,28 +286,12 @@ export default function AdminPatients() {
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Search by name, NIC, RFID, or email..."
+                placeholder="Search by name, NIC, or email..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-10"
               />
             </div>
-            <Select value={bloodTypeFilter} onValueChange={setBloodTypeFilter}>
-              <SelectTrigger className="w-[150px]">
-                <SelectValue placeholder="Blood Type" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Blood Types</SelectItem>
-                <SelectItem value="A+">A+</SelectItem>
-                <SelectItem value="A-">A-</SelectItem>
-                <SelectItem value="B+">B+</SelectItem>
-                <SelectItem value="B-">B-</SelectItem>
-                <SelectItem value="AB+">AB+</SelectItem>
-                <SelectItem value="AB-">AB-</SelectItem>
-                <SelectItem value="O+">O+</SelectItem>
-                <SelectItem value="O-">O-</SelectItem>
-              </SelectContent>
-            </Select>
             <Select value={genderFilter} onValueChange={setGenderFilter}>
               <SelectTrigger className="w-[150px]">
                 <SelectValue placeholder="Gender" />
@@ -301,6 +303,16 @@ export default function AdminPatients() {
                 <SelectItem value="other">Other</SelectItem>
               </SelectContent>
             </Select>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-[150px]">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="inactive">Inactive</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Table */}
@@ -308,13 +320,13 @@ export default function AdminPatients() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Patient Name</TableHead>
+                  <TableHead>Patient ID</TableHead>
+                  <TableHead>Full Name</TableHead>
                   <TableHead>NIC</TableHead>
-                  <TableHead>RFID</TableHead>
                   <TableHead>Contact</TableHead>
-                  <TableHead>Blood Type</TableHead>
                   <TableHead>Gender</TableHead>
-                  <TableHead>Allergies</TableHead>
+                  <TableHead>RFID (Masked)</TableHead>
+                  <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -322,43 +334,40 @@ export default function AdminPatients() {
                 {filteredPatients && filteredPatients.length > 0 ? (
                   filteredPatients.map((patient) => (
                     <TableRow key={patient.id}>
+                      <TableCell>
+                        <Badge variant="outline" className="font-mono text-xs">
+                          {patient.id.slice(0, 8)}
+                        </Badge>
+                      </TableCell>
                       <TableCell className="font-medium">
                         <div>
-                          <p className="font-semibold">
-                            {patient.user?.firstName} {patient.user?.lastName}
+                          <p className="font-semibold flex items-center gap-2">
+                            <User className="h-4 w-4" />
+                            {patient.firstName} {patient.lastName}
                           </p>
                           <p className="text-sm text-muted-foreground">
-                            {patient.user?.email}
+                            {patient.email}
                           </p>
                         </div>
                       </TableCell>
                       <TableCell>{patient.nic}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="bg-primary/10">
-                          {patient.rfid}
-                        </Badge>
-                      </TableCell>
                       <TableCell>{patient.contactInfo || "—"}</TableCell>
-                      <TableCell>
-                        {patient.bloodType ? (
-                          <Badge variant="secondary">{patient.bloodType}</Badge>
-                        ) : (
-                          "—"
-                        )}
-                      </TableCell>
                       <TableCell className="capitalize">
                         {patient.gender || "—"}
                       </TableCell>
                       <TableCell>
-                        {patient.allergies &&
-                        patient.allergies !== "None" &&
-                        patient.allergies !== "" ? (
-                          <div className="flex items-center gap-1 text-destructive">
-                            <AlertCircle className="h-4 w-4" />
-                            <span className="text-sm">Yes</span>
-                          </div>
+                        <Badge
+                          variant="outline"
+                          className="bg-muted font-mono text-xs"
+                        >
+                          {patient.rfid}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {patient.isActive ? (
+                          <Badge className="bg-green-500">Active</Badge>
                         ) : (
-                          <span className="text-muted-foreground">None</span>
+                          <Badge variant="secondary">Inactive</Badge>
                         )}
                       </TableCell>
                       <TableCell className="text-right">
@@ -368,7 +377,7 @@ export default function AdminPatients() {
                           onClick={() => handleViewDetails(patient)}
                         >
                           <FileText className="h-4 w-4 mr-1" />
-                          View
+                          View Details
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -389,59 +398,71 @@ export default function AdminPatients() {
         </CardContent>
       </Card>
 
-      {/* Patient Details Dialog */}
+      {/* Patient Details Dialog - ADMIN VIEW (NO MEDICAL DATA) */}
       <Dialog open={detailsDialogOpen} onOpenChange={setDetailsDialogOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Patient Details</DialogTitle>
+            <DialogTitle>Patient Information</DialogTitle>
             <DialogDescription>
-              Complete patient information and medical records
+              Basic patient registration and contact details
             </DialogDescription>
           </DialogHeader>
 
           {selectedPatient && (
-            <Tabs defaultValue="info" className="w-full">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="info">Personal Information</TabsTrigger>
-                <TabsTrigger value="medical">Medical Information</TabsTrigger>
-              </TabsList>
+            <div className="space-y-6">
+              {/* Privacy Warning */}
+              <Alert className="bg-yellow-50 dark:bg-yellow-950 border-yellow-200 dark:border-yellow-800">
+                <ShieldAlert className="h-4 w-4 text-yellow-600" />
+                <AlertDescription className="text-yellow-900 dark:text-yellow-100">
+                  Medical records, lab reports, and prescriptions are not
+                  accessible to administrators. Contact authorized medical
+                  personnel for medical data access.
+                </AlertDescription>
+              </Alert>
 
-              <TabsContent value="info" className="space-y-4 mt-4">
+              {/* Personal Information */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold border-b pb-2">
+                  Personal Information
+                </h3>
                 <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-muted-foreground">
+                      Patient ID
+                    </label>
+                    <Badge variant="outline" className="font-mono">
+                      {selectedPatient.id}
+                    </Badge>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-muted-foreground">
+                      Account Status
+                    </label>
+                    {selectedPatient.isActive ? (
+                      <Badge className="bg-green-500">Active</Badge>
+                    ) : (
+                      <Badge variant="secondary">Inactive</Badge>
+                    )}
+                  </div>
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-muted-foreground">
                       Full Name
                     </label>
                     <p className="text-lg font-semibold">
-                      {selectedPatient.user?.firstName}{" "}
-                      {selectedPatient.user?.lastName}
+                      {selectedPatient.firstName} {selectedPatient.lastName}
                     </p>
                   </div>
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-muted-foreground">
-                      Email
+                      Email Address
                     </label>
-                    <p>{selectedPatient.user?.email || "—"}</p>
+                    <p>{selectedPatient.email || "—"}</p>
                   </div>
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-muted-foreground">
-                      NIC
+                      National ID (NIC)
                     </label>
-                    <p>{selectedPatient.nic}</p>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-muted-foreground">
-                      RFID Tag
-                    </label>
-                    <Badge variant="outline" className="bg-primary/10">
-                      {selectedPatient.rfid}
-                    </Badge>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-muted-foreground">
-                      Health ID
-                    </label>
-                    <p>{selectedPatient.healthId || "—"}</p>
+                    <p className="font-mono">{selectedPatient.nic}</p>
                   </div>
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-muted-foreground">
@@ -452,7 +473,7 @@ export default function AdminPatients() {
                         ? new Date(
                             selectedPatient.dateOfBirth
                           ).toLocaleDateString()
-                        : "—"}
+                        : "Not provided"}
                     </p>
                   </div>
                   <div className="space-y-2">
@@ -460,15 +481,34 @@ export default function AdminPatients() {
                       Gender
                     </label>
                     <p className="capitalize">
-                      {selectedPatient.gender || "—"}
+                      {selectedPatient.gender || "Not specified"}
                     </p>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-muted-foreground">
+                      RFID Code (Masked)
+                    </label>
+                    <Badge
+                      variant="outline"
+                      className="bg-muted font-mono text-xs"
+                    >
+                      {selectedPatient.rfid}
+                    </Badge>
                   </div>
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                       <Phone className="h-4 w-4" />
-                      Contact
+                      Contact Number
                     </label>
                     <p>{selectedPatient.contactInfo || "—"}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-muted-foreground">
+                      Registration Date
+                    </label>
+                    <p>
+                      {new Date(selectedPatient.createdAt).toLocaleDateString()}
+                    </p>
                   </div>
                   <div className="space-y-2 col-span-2">
                     <label className="text-sm font-medium text-muted-foreground flex items-center gap-2">
@@ -478,67 +518,37 @@ export default function AdminPatients() {
                     <p>{selectedPatient.address || "—"}</p>
                   </div>
                 </div>
-              </TabsContent>
+              </div>
 
-              <TabsContent value="medical" className="space-y-4 mt-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                      <Droplet className="h-4 w-4" />
-                      Blood Type
-                    </label>
-                    {selectedPatient.bloodType ? (
-                      <Badge variant="secondary" className="text-lg">
-                        {selectedPatient.bloodType}
-                      </Badge>
-                    ) : (
-                      <p className="text-muted-foreground">Not specified</p>
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-muted-foreground">
-                      Registered Date
-                    </label>
-                    <p>
-                      {new Date(selectedPatient.createdAt).toLocaleDateString()}
-                    </p>
-                  </div>
-                  <div className="space-y-2 col-span-2">
-                    <label className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                      <AlertCircle className="h-4 w-4" />
-                      Allergies
-                    </label>
-                    {selectedPatient.allergies &&
-                    selectedPatient.allergies !== "None" &&
-                    selectedPatient.allergies !== "" ? (
-                      <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-md">
-                        <p className="text-destructive font-medium">
-                          {selectedPatient.allergies}
-                        </p>
-                      </div>
-                    ) : (
-                      <p className="text-muted-foreground">
-                        No known allergies
-                      </p>
-                    )}
-                  </div>
+              {/* Restricted Data Notice */}
+              <div className="pt-4 border-t">
+                <h3 className="text-lg font-semibold mb-3 text-muted-foreground">
+                  Restricted Information
+                </h3>
+                <div className="bg-muted p-4 rounded-md space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    ❌ Medical Records - Access Denied
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    ❌ Lab Reports - Access Denied
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    ❌ Prescriptions - Access Denied
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    ❌ Diagnosis History - Access Denied
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    ❌ Doctor Notes - Access Denied
+                  </p>
                 </div>
-
-                <div className="pt-4 border-t">
-                  <h4 className="text-sm font-medium mb-3">Quick Actions</h4>
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm">
-                      <Calendar className="h-4 w-4 mr-2" />
-                      View Appointments
-                    </Button>
-                    <Button variant="outline" size="sm">
-                      <FileText className="h-4 w-4 mr-2" />
-                      Medical Records
-                    </Button>
-                  </div>
-                </div>
-              </TabsContent>
-            </Tabs>
+                <p className="text-xs text-muted-foreground mt-3">
+                  Admin users can only view basic patient information for system
+                  management and user verification purposes in compliance with
+                  data privacy regulations.
+                </p>
+              </div>
+            </div>
           )}
         </DialogContent>
       </Dialog>

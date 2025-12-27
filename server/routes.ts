@@ -33,6 +33,7 @@ import {
   insertNotificationSchema,
   insertChatMessageSchema,
   appointments,
+  patients,
   doctorAvailability,
   labTests as labTestsTable,
   prescriptions,
@@ -66,10 +67,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/patients", isAuthenticated, async (req, res) => {
+  // Get all patients (with RBAC - admin sees limited info)
+  app.get("/api/patients", isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.user.id;
+      const user = await storage.getUser(userId);
+
+      if (!user) {
+        return res.status(401).json({ message: "User not found" });
+      }
+
       const patients = await storage.getAllPatients();
-      res.json(patients);
+
+      // Enrich with user data
+      const enrichedPatients = await Promise.all(
+        patients.map(async (patient: any) => {
+          const patientUser = await storage.getUser(patient.userId);
+
+          // Admin sees only basic info (NO medical data)
+          if (user.role === "admin") {
+            return {
+              id: patient.id,
+              userId: patient.userId,
+              firstName: patientUser?.firstName || "Unknown",
+              lastName: patientUser?.lastName || "",
+              email: patientUser?.email || "",
+              nic: patient.nic,
+              dateOfBirth: patient.dateOfBirth,
+              gender: patient.gender,
+              contactInfo: patient.contactInfo,
+              address: patient.address,
+              rfid: patient.rfid ? `****${patient.rfid.slice(-4)}` : undefined, // Masked RFID
+              isActive: patientUser?.isActive ?? true, // Default to true if undefined
+              createdAt: patient.createdAt,
+              // Explicitly exclude medical data
+              bloodType: undefined,
+              allergies: undefined,
+              healthId: undefined,
+            };
+          }
+
+          // Doctors and other roles see full info
+          return {
+            ...patient,
+            firstName: patientUser?.firstName || "Unknown",
+            lastName: patientUser?.lastName || "",
+            email: patientUser?.email || "",
+            isActive: patientUser?.isActive ?? true, // Default to true if undefined
+          };
+        })
+      );
+
+      res.json(enrichedPatients);
     } catch (error) {
       console.error("Error fetching patients:", error);
       res.status(500).json({ message: "Failed to fetch patients" });
@@ -114,6 +163,106 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching patient:", error);
       res.status(500).json({ message: "Failed to fetch patient" });
+    }
+  });
+
+  // Verify patient by ID, NIC, and RFID (for doctor access to medical records)
+  app.post("/api/patients/verify", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const user = await storage.getUser(userId);
+      const { patientId, nic, rfid } = req.body;
+
+      if (!user) {
+        return res.status(401).json({ message: "User not found" });
+      }
+
+      // Only doctors can verify patients for medical record access
+      if (user.role !== "doctor") {
+        return res
+          .status(403)
+          .json({ message: "Only doctors can verify patient access" });
+      }
+
+      // Validate at least one identifier is provided
+      if (!patientId && !nic && !rfid) {
+        return res.status(400).json({
+          message:
+            "At least one identifier (Patient ID, NIC, or RFID) is required",
+        });
+      }
+
+      // Search for patient by any provided identifier
+      let patient;
+
+      if (patientId) {
+        // Search by Health ID (the user-facing patient ID)
+        const allPatients = await db
+          .select()
+          .from(patients)
+          .where(eq(patients.healthId, patientId));
+        patient = allPatients[0];
+      } else if (nic) {
+        // Search by NIC
+        const allPatients = await db
+          .select()
+          .from(patients)
+          .where(eq(patients.nic, nic));
+        patient = allPatients[0];
+      } else if (rfid) {
+        // Search by RFID
+        const allPatients = await db
+          .select()
+          .from(patients)
+          .where(eq(patients.rfid, rfid));
+        patient = allPatients[0];
+      }
+
+      if (!patient) {
+        // Log failed search attempt
+        await storage.createAccessLog({
+          userId,
+          userRole: user.role,
+          patientId: patientId || "unknown",
+          accessType: "view",
+          resourceType: "patient_info",
+          resourceId: patientId || nic || rfid || "unknown",
+          ipAddress: req.ip || req.connection.remoteAddress,
+          userAgent: req.get("user-agent") || undefined,
+        });
+
+        return res.status(404).json({
+          message: "Patient not found with the provided identifier.",
+        });
+      }
+
+      // Verification successful - log access
+      await storage.createAccessLog({
+        userId,
+        userRole: user.role,
+        patientId: patient.id,
+        accessType: "view",
+        resourceType: "patient_info",
+        resourceId: patient.id,
+        ipAddress: req.ip || req.connection.remoteAddress,
+        userAgent: req.get("user-agent") || undefined,
+      });
+
+      // Get full patient info with user data
+      const patientUser = await storage.getUser(patient.userId);
+
+      res.json({
+        verified: true,
+        patient: {
+          ...patient,
+          firstName: patientUser?.firstName,
+          lastName: patientUser?.lastName,
+          email: patientUser?.email,
+        },
+      });
+    } catch (error) {
+      console.error("Error verifying patient:", error);
+      res.status(500).json({ message: "Failed to verify patient" });
     }
   });
 
@@ -1812,6 +1961,284 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (error) {
         console.error("Error fetching medical records:", error);
         res.status(500).json({ message: "Failed to fetch medical records" });
+      }
+    }
+  );
+
+  // ============================================================================
+  // MEDICAL DOCUMENTS ROUTES (Lab Reports, Medical Files)
+  // ============================================================================
+
+  // Create access log helper function
+  const logAccess = async (
+    userId: string,
+    userRole: string,
+    patientId: string,
+    accessType: string,
+    resourceType: string,
+    resourceId: string | null,
+    req: any
+  ) => {
+    try {
+      await storage.createAccessLog({
+        userId,
+        userRole,
+        patientId,
+        accessType,
+        resourceType,
+        resourceId: resourceId || undefined,
+        ipAddress: req.ip || req.connection.remoteAddress,
+        userAgent: req.get("user-agent") || undefined,
+      });
+    } catch (error) {
+      console.error("Error logging access:", error);
+    }
+  };
+
+  // Upload medical document
+  app.post("/api/medical-documents", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const user = await storage.getUser(userId);
+
+      if (!user) {
+        return res.status(401).json({ message: "User not found" });
+      }
+
+      // Validate that only doctors and patients can upload
+      if (!["doctor", "patient"].includes(user.role)) {
+        return res
+          .status(403)
+          .json({ message: "Only doctors and patients can upload documents" });
+      }
+
+      const documentData = {
+        ...req.body,
+        uploadedBy: userId,
+        uploadedByRole: user.role,
+        isPublic: user.role === "doctor" ? req.body.isPublic ?? true : false, // Doctor uploads are public by default
+      };
+
+      const document = await storage.createMedicalDocument(documentData);
+
+      // Log the upload
+      await logAccess(
+        userId,
+        user.role,
+        documentData.patientId,
+        "upload",
+        "document",
+        document.id,
+        req
+      );
+
+      res.status(201).json(document);
+    } catch (error: any) {
+      console.error("Error uploading medical document:", error);
+      res
+        .status(400)
+        .json({ message: error.message || "Failed to upload document" });
+    }
+  });
+
+  // Get medical documents for a patient (with access control)
+  app.get(
+    "/api/medical-documents/patient/:patientId",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+        const { patientId } = req.params;
+
+        if (!user) {
+          return res.status(401).json({ message: "User not found" });
+        }
+
+        // Admin can only see basic patient info, not medical documents
+        if (user.role === "admin") {
+          return res.status(403).json({
+            message: "Admins do not have access to medical documents",
+          });
+        }
+
+        // Patient can only see their own documents
+        if (user.role === "patient") {
+          const patient = await storage.getPatientByUserId(userId);
+          if (!patient || patient.id !== patientId) {
+            return res
+              .status(403)
+              .json({ message: "Access denied to this patient's documents" });
+          }
+        }
+
+        // Doctor needs valid verification (we'll implement this in the UI)
+        // For now, doctors can access after proper authentication
+
+        const documents = await storage.getMedicalDocumentsByPatient(patientId);
+
+        // Filter documents based on role
+        let filteredDocuments = documents;
+        if (user.role === "patient") {
+          // Patients see only public documents (uploaded by doctors) and their own uploads
+          filteredDocuments = documents.filter(
+            (doc) => doc.isPublic || doc.uploadedBy === userId
+          );
+        }
+
+        // Log the access
+        await logAccess(
+          userId,
+          user.role,
+          patientId,
+          "view",
+          "document",
+          null,
+          req
+        );
+
+        res.json(filteredDocuments);
+      } catch (error) {
+        console.error("Error fetching medical documents:", error);
+        res.status(500).json({ message: "Failed to fetch medical documents" });
+      }
+    }
+  );
+
+  // Get medical documents for an appointment
+  app.get(
+    "/api/medical-documents/appointment/:appointmentId",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+        const { appointmentId } = req.params;
+
+        if (!user) {
+          return res.status(401).json({ message: "User not found" });
+        }
+
+        // Get appointment to verify access
+        const appointment = await storage.getAppointment(appointmentId);
+        if (!appointment) {
+          return res.status(404).json({ message: "Appointment not found" });
+        }
+
+        // Verify user has access to this appointment
+        if (user.role === "patient") {
+          const patient = await storage.getPatientByUserId(userId);
+          if (!patient || patient.id !== appointment.patientId) {
+            return res.status(403).json({ message: "Access denied" });
+          }
+        } else if (user.role === "doctor") {
+          const doctor = await storage.getDoctorByUserId(userId);
+          if (!doctor || doctor.id !== appointment.doctorId) {
+            return res.status(403).json({ message: "Access denied" });
+          }
+        } else if (user.role !== "admin") {
+          return res.status(403).json({ message: "Access denied" });
+        }
+
+        const documents = await storage.getMedicalDocumentsByAppointment(
+          appointmentId
+        );
+
+        // Log the access
+        await logAccess(
+          userId,
+          user.role,
+          appointment.patientId,
+          "view",
+          "document",
+          null,
+          req
+        );
+
+        res.json(documents);
+      } catch (error) {
+        console.error("Error fetching appointment documents:", error);
+        res
+          .status(500)
+          .json({ message: "Failed to fetch appointment documents" });
+      }
+    }
+  );
+
+  // Delete medical document
+  app.delete(
+    "/api/medical-documents/:id",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+        const { id } = req.params;
+
+        if (!user) {
+          return res.status(401).json({ message: "User not found" });
+        }
+
+        // Get the document to check ownership
+        const document = await storage.getMedicalDocument(id);
+        if (!document) {
+          return res.status(404).json({ message: "Document not found" });
+        }
+
+        // Only the uploader can delete (or admin with special permission)
+        if (document.uploadedBy !== userId && user.role !== "admin") {
+          return res
+            .status(403)
+            .json({ message: "You can only delete your own uploads" });
+        }
+
+        await storage.deleteMedicalDocument(id);
+
+        // Log the deletion
+        await logAccess(
+          userId,
+          user.role,
+          document.patientId,
+          "delete",
+          "document",
+          id,
+          req
+        );
+
+        res.json({ message: "Document deleted successfully" });
+      } catch (error) {
+        console.error("Error deleting medical document:", error);
+        res.status(500).json({ message: "Failed to delete document" });
+      }
+    }
+  );
+
+  // Get access logs for a patient (admin and doctors only)
+  app.get(
+    "/api/access-logs/patient/:patientId",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+        const { patientId } = req.params;
+
+        if (!user) {
+          return res.status(401).json({ message: "User not found" });
+        }
+
+        // Only admin and doctors can view access logs
+        if (!["admin", "doctor"].includes(user.role)) {
+          return res
+            .status(403)
+            .json({ message: "Access denied to view logs" });
+        }
+
+        const logs = await storage.getAccessLogsByPatient(patientId);
+        res.json(logs);
+      } catch (error) {
+        console.error("Error fetching access logs:", error);
+        res.status(500).json({ message: "Failed to fetch access logs" });
       }
     }
   );

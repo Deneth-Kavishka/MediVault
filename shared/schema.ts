@@ -231,6 +231,59 @@ export const medicalRecords = pgTable("medical_records", {
 });
 
 // ============================================================================
+// MEDICAL DOCUMENTS TABLE (Lab Reports, Prescriptions, Medical Files)
+// ============================================================================
+
+export const medicalDocuments = pgTable("medical_documents", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  patientId: varchar("patient_id")
+    .notNull()
+    .references(() => patients.id),
+  doctorId: varchar("doctor_id").references(() => doctors.id), // Null if uploaded by patient
+  appointmentId: varchar("appointment_id").references(() => appointments.id), // Link to appointment if applicable
+  medicalRecordId: varchar("medical_record_id").references(
+    () => medicalRecords.id
+  ), // Link to medical record if applicable
+  documentType: varchar("document_type").notNull(), // 'lab_report' | 'prescription' | 'diagnosis' | 'consultation_note' | 'medical_image' | 'other'
+  title: varchar("title").notNull(),
+  description: text("description"),
+  fileUrl: text("file_url").notNull(), // Storage path/URL to the file
+  fileName: varchar("file_name").notNull(),
+  fileType: varchar("file_type").notNull(), // 'pdf' | 'jpg' | 'png' | 'doc' | 'docx'
+  fileSize: integer("file_size"), // in bytes
+  uploadedBy: varchar("uploaded_by").notNull(), // User ID who uploaded
+  uploadedByRole: varchar("uploaded_by_role").notNull(), // 'doctor' | 'patient' | 'admin'
+  isPublic: boolean("is_public").default(false), // If true, patient can see it
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ============================================================================
+// MEDICAL ACCESS LOG TABLE (Audit Trail)
+// ============================================================================
+
+export const medicalAccessLogs = pgTable("medical_access_logs", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id), // Who accessed
+  userRole: varchar("user_role").notNull(), // Role of the user
+  patientId: varchar("patient_id")
+    .notNull()
+    .references(() => patients.id), // Whose data was accessed
+  accessType: varchar("access_type").notNull(), // 'view' | 'download' | 'upload' | 'modify' | 'delete'
+  resourceType: varchar("resource_type").notNull(), // 'medical_record' | 'document' | 'prescription' | 'lab_report' | 'patient_info'
+  resourceId: varchar("resource_id"), // ID of the accessed resource
+  ipAddress: varchar("ip_address"),
+  userAgent: text("user_agent"),
+  accessedAt: timestamp("accessed_at").defaultNow(),
+});
+
+// ============================================================================
 // PRESCRIPTION TABLE
 // ============================================================================
 
@@ -479,6 +532,8 @@ export const patientsRelations = relations(patients, ({ one, many }) => ({
   prescriptions: many(prescriptions),
   labTests: many(labTests),
   bills: many(bills),
+  medicalDocuments: many(medicalDocuments),
+  accessLogs: many(medicalAccessLogs),
 }));
 
 export const doctorsRelations = relations(doctors, ({ one, many }) => ({
@@ -487,6 +542,7 @@ export const doctorsRelations = relations(doctors, ({ one, many }) => ({
   medicalRecords: many(medicalRecords),
   prescriptions: many(prescriptions),
   labTests: many(labTests),
+  medicalDocuments: many(medicalDocuments),
 }));
 
 export const appointmentsRelations = relations(
@@ -594,6 +650,46 @@ export const chatMessagesRelations = relations(chatMessages, ({ one }) => ({
   }),
 }));
 
+export const medicalDocumentsRelations = relations(
+  medicalDocuments,
+  ({ one }) => ({
+    patient: one(patients, {
+      fields: [medicalDocuments.patientId],
+      references: [patients.id],
+    }),
+    doctor: one(doctors, {
+      fields: [medicalDocuments.doctorId],
+      references: [doctors.id],
+    }),
+    appointment: one(appointments, {
+      fields: [medicalDocuments.appointmentId],
+      references: [appointments.id],
+    }),
+    medicalRecord: one(medicalRecords, {
+      fields: [medicalDocuments.medicalRecordId],
+      references: [medicalRecords.id],
+    }),
+    uploadedByUser: one(users, {
+      fields: [medicalDocuments.uploadedBy],
+      references: [users.id],
+    }),
+  })
+);
+
+export const medicalAccessLogsRelations = relations(
+  medicalAccessLogs,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [medicalAccessLogs.userId],
+      references: [users.id],
+    }),
+    patient: one(patients, {
+      fields: [medicalAccessLogs.patientId],
+      references: [patients.id],
+    }),
+  })
+);
+
 // ============================================================================
 // ZOD SCHEMAS FOR VALIDATION
 // ============================================================================
@@ -684,6 +780,23 @@ export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({
   createdAt: true,
 });
 
+// Medical documents schemas
+export const insertMedicalDocumentSchema = createInsertSchema(
+  medicalDocuments
+).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+// Medical access log schemas
+export const insertMedicalAccessLogSchema = createInsertSchema(
+  medicalAccessLogs
+).omit({
+  id: true,
+  accessedAt: true,
+});
+
 // ============================================================================
 // TYPE EXPORTS
 // ============================================================================
@@ -740,5 +853,13 @@ export type Notification = typeof notifications.$inferSelect;
 
 export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
 export type ChatMessage = typeof chatMessages.$inferSelect;
+
+export type InsertMedicalDocument = z.infer<typeof insertMedicalDocumentSchema>;
+export type MedicalDocument = typeof medicalDocuments.$inferSelect;
+
+export type InsertMedicalAccessLog = z.infer<
+  typeof insertMedicalAccessLogSchema
+>;
+export type MedicalAccessLog = typeof medicalAccessLogs.$inferSelect;
 
 export type AuditLog = typeof auditLogs.$inferSelect;

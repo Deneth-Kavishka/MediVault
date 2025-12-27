@@ -8,6 +8,8 @@ import {
   doctorAvailability,
   appointments,
   medicalRecords,
+  medicalDocuments,
+  medicalAccessLogs,
   prescriptions,
   prescriptionItems,
   medicines,
@@ -34,6 +36,10 @@ import {
   type InsertAppointment,
   type MedicalRecord,
   type InsertMedicalRecord,
+  type MedicalDocument,
+  type InsertMedicalDocument,
+  type MedicalAccessLog,
+  type InsertMedicalAccessLog,
   type Prescription,
   type InsertPrescription,
   type PrescriptionItem,
@@ -140,6 +146,26 @@ export interface IStorage {
   createMedicalRecord(record: InsertMedicalRecord): Promise<MedicalRecord>;
   getMedicalRecord(id: string): Promise<MedicalRecord | undefined>;
   getMedicalRecordsByPatient(patientId: string): Promise<MedicalRecord[]>;
+
+  // Medical Document operations
+  createMedicalDocument(
+    document: InsertMedicalDocument
+  ): Promise<MedicalDocument>;
+  getMedicalDocument(id: string): Promise<MedicalDocument | undefined>;
+  getMedicalDocumentsByPatient(patientId: string): Promise<MedicalDocument[]>;
+  getMedicalDocumentsByAppointment(
+    appointmentId: string
+  ): Promise<MedicalDocument[]>;
+  updateMedicalDocument(
+    id: string,
+    data: Partial<InsertMedicalDocument>
+  ): Promise<MedicalDocument | undefined>;
+  deleteMedicalDocument(id: string): Promise<void>;
+
+  // Medical Access Log operations
+  createAccessLog(log: InsertMedicalAccessLog): Promise<MedicalAccessLog>;
+  getAccessLogsByPatient(patientId: string): Promise<MedicalAccessLog[]>;
+  getAccessLogsByUser(userId: string): Promise<MedicalAccessLog[]>;
 
   // Prescription operations
   createPrescription(prescription: InsertPrescription): Promise<Prescription>;
@@ -1167,6 +1193,94 @@ export class DatabaseStorage implements IStorage {
       .from(medicalRecords)
       .where(eq(medicalRecords.patientId, patientId))
       .orderBy(desc(medicalRecords.createdAt));
+  }
+
+  // ============================================================================
+  // MEDICAL DOCUMENT OPERATIONS
+  // ============================================================================
+
+  async createMedicalDocument(
+    documentData: InsertMedicalDocument
+  ): Promise<MedicalDocument> {
+    const [document] = await db
+      .insert(medicalDocuments)
+      .values(documentData)
+      .returning();
+    return document;
+  }
+
+  async getMedicalDocument(id: string): Promise<MedicalDocument | undefined> {
+    const [document] = await db
+      .select()
+      .from(medicalDocuments)
+      .where(eq(medicalDocuments.id, id));
+    return document;
+  }
+
+  async getMedicalDocumentsByPatient(
+    patientId: string
+  ): Promise<MedicalDocument[]> {
+    return await db
+      .select()
+      .from(medicalDocuments)
+      .where(eq(medicalDocuments.patientId, patientId))
+      .orderBy(desc(medicalDocuments.createdAt));
+  }
+
+  async getMedicalDocumentsByAppointment(
+    appointmentId: string
+  ): Promise<MedicalDocument[]> {
+    return await db
+      .select()
+      .from(medicalDocuments)
+      .where(eq(medicalDocuments.appointmentId, appointmentId))
+      .orderBy(desc(medicalDocuments.createdAt));
+  }
+
+  async updateMedicalDocument(
+    id: string,
+    data: Partial<InsertMedicalDocument>
+  ): Promise<MedicalDocument | undefined> {
+    const [updated] = await db
+      .update(medicalDocuments)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(medicalDocuments.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteMedicalDocument(id: string): Promise<void> {
+    await db.delete(medicalDocuments).where(eq(medicalDocuments.id, id));
+  }
+
+  // ============================================================================
+  // MEDICAL ACCESS LOG OPERATIONS
+  // ============================================================================
+
+  async createAccessLog(
+    logData: InsertMedicalAccessLog
+  ): Promise<MedicalAccessLog> {
+    const [log] = await db
+      .insert(medicalAccessLogs)
+      .values(logData)
+      .returning();
+    return log;
+  }
+
+  async getAccessLogsByPatient(patientId: string): Promise<MedicalAccessLog[]> {
+    return await db
+      .select()
+      .from(medicalAccessLogs)
+      .where(eq(medicalAccessLogs.patientId, patientId))
+      .orderBy(desc(medicalAccessLogs.accessedAt));
+  }
+
+  async getAccessLogsByUser(userId: string): Promise<MedicalAccessLog[]> {
+    return await db
+      .select()
+      .from(medicalAccessLogs)
+      .where(eq(medicalAccessLogs.userId, userId))
+      .orderBy(desc(medicalAccessLogs.accessedAt));
   }
 
   // ============================================================================

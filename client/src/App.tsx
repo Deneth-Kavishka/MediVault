@@ -21,6 +21,7 @@ import Messages from "@/pages/messages";
 import AdminUsers from "@/pages/admin-users";
 import AdminDoctorAvailability from "@/pages/admin-doctor-availability";
 import AdminPatients from "@/pages/admin-patients";
+import DoctorPatients from "@/pages/doctor-patients";
 import DoctorAvailability from "@/pages/doctor-availability";
 import FindDoctors from "@/pages/find-doctors";
 import AdminDoctors from "@/pages/admin-doctors";
@@ -103,6 +104,7 @@ function Router() {
       <Route path="/lab-tests" component={Dashboard} />
       <Route path="/bills" component={Dashboard} />
       <Route path="/patients" component={AdminPatients} />
+      <Route path="/doctor/patients" component={DoctorPatients} />
       <Route path="/doctors" component={AdminDoctors} />
       <Route path="/appointments-admin" component={AdminAppointments} />
       <Route path="/inventory" component={Dashboard} />
