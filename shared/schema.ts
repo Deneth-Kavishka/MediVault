@@ -305,7 +305,12 @@ export const prescriptions = pgTable("prescriptions", {
   expiryDate: timestamp("expiry_date"),
   validityDays: integer("validity_days").default(90), // Number of days prescription is valid
   qrCode: text("qr_code"), // QR code data for verification
-  status: varchar("status").notNull(), // 'active' | 'dispensed' | 'expired'
+  status: varchar("status").notNull(), // 'active' | 'dispensed' | 'expired' | 'cancelled'
+  scannedCount: integer("scanned_count").default(0), // Number of times QR code scanned
+  lastScannedAt: timestamp("last_scanned_at"), // Last scan timestamp
+  lastScannedBy: varchar("last_scanned_by"), // Pharmacist who last scanned
+  dispensedAt: timestamp("dispensed_at"), // When prescription was dispensed
+  dispensedBy: varchar("dispensed_by"), // Pharmacist who dispensed
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -483,6 +488,70 @@ export const auditLogs = pgTable("audit_logs", {
   details: text("details"),
   ipAddress: varchar("ip_address"),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ============================================================================
+// SYSTEM SETTINGS TABLE
+// ============================================================================
+
+export const systemSettings = pgTable("system_settings", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  // General/Organization Details
+  systemName: varchar("system_name").notNull(),
+  systemEmail: varchar("system_email").notNull(),
+  systemPhone: varchar("system_phone"),
+  systemAddress: text("system_address"),
+  systemWebsite: varchar("system_website"),
+  systemLogo: varchar("system_logo"),
+  systemDescription: text("system_description"),
+  licenseNumber: varchar("license_number"),
+  establishedYear: integer("established_year"),
+  emergencyContact: varchar("emergency_contact"),
+  faxNumber: varchar("fax_number"),
+  timezone: varchar("timezone").default("UTC"),
+  currency: varchar("currency").default("USD"),
+  language: varchar("language").default("en"),
+
+  // Appointment Settings
+  appointmentDuration: integer("appointment_duration").default(30),
+  appointmentSlotInterval: integer("appointment_slot_interval").default(15),
+  maxAppointmentsPerDay: integer("max_appointments_per_day").default(20),
+  workingHoursStart: varchar("working_hours_start").default("09:00"),
+  workingHoursEnd: varchar("working_hours_end").default("17:00"),
+  workingDays: text("working_days").default(
+    "Monday,Tuesday,Wednesday,Thursday,Friday"
+  ),
+
+  // Notification Settings
+  enableEmailNotifications: boolean("enable_email_notifications").default(true),
+  enableSmsNotifications: boolean("enable_sms_notifications").default(false),
+  enableAppointmentReminders: boolean("enable_appointment_reminders").default(
+    true
+  ),
+  reminderHoursBefore: integer("reminder_hours_before").default(24),
+
+  // Backup Settings
+  autoBackupEnabled: boolean("auto_backup_enabled").default(true),
+  backupFrequency: varchar("backup_frequency").default("daily"),
+
+  // Security Settings
+  sessionTimeout: integer("session_timeout").default(30),
+  maxLoginAttempts: integer("max_login_attempts").default(5),
+  enableTwoFactorAuth: boolean("enable_two_factor_auth").default(false),
+  dataRetentionDays: integer("data_retention_days").default(365),
+  passwordExpiryDays: integer("password_expiry_days").default(90),
+
+  // Social Media & Contact
+  facebookUrl: varchar("facebook_url"),
+  twitterUrl: varchar("twitter_url"),
+  linkedinUrl: varchar("linkedin_url"),
+  instagramUrl: varchar("instagram_url"),
+
+  // System Metadata
+  updatedAt: timestamp("updated_at").defaultNow(),
+  updatedBy: varchar("updated_by"),
 });
 
 // ============================================================================
@@ -853,6 +922,16 @@ export type Notification = typeof notifications.$inferSelect;
 
 export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
 export type ChatMessage = typeof chatMessages.$inferSelect;
+
+export const insertSystemSettingsSchema = createInsertSchema(
+  systemSettings
+).omit({
+  id: true,
+  updatedAt: true,
+});
+
+export type InsertSystemSettings = z.infer<typeof insertSystemSettingsSchema>;
+export type SystemSettings = typeof systemSettings.$inferSelect;
 
 export type InsertMedicalDocument = z.infer<typeof insertMedicalDocumentSchema>;
 export type MedicalDocument = typeof medicalDocuments.$inferSelect;

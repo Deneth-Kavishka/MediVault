@@ -87,7 +87,11 @@ export function AppSidebar() {
         { title: "My Availability", url: "/doctor/availability", icon: MapPin },
         { title: "Appointments", url: "/appointments", icon: Calendar },
         { title: "Patient Records", url: "/doctor/patients", icon: Users },
-        { title: "Medical Records", url: "/medical-records", icon: FileText },
+        {
+          title: "My Medical Records",
+          url: "/doctor/medical-records",
+          icon: FileText,
+        },
         { title: "Prescriptions", url: "/prescriptions", icon: Pill },
         { title: "Lab Tests", url: "/lab-tests", icon: FlaskConical },
       ],

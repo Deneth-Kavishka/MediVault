@@ -68,14 +68,29 @@ interface Doctor {
 
 interface Appointment {
   id: string;
+  doctorId: string;
+  patientId: string;
   status: string;
   appointmentDate: string;
+  appointmentTime: string;
+  createdAt: string;
   patient?: {
     user?: {
       firstName?: string;
       lastName?: string;
     };
   };
+}
+
+interface DoctorAvailability {
+  id: string;
+  doctorId: string;
+  availableDate: string;
+  startTime: string;
+  endTime: string;
+  status: string;
+  maxPatients?: number;
+  bookedPatients?: number;
 }
 
 export default function AdminDoctors() {
@@ -99,6 +114,11 @@ export default function AdminDoctors() {
   // Fetch appointments for stats
   const { data: appointments } = useQuery<Appointment[]>({
     queryKey: ["/api/appointments"],
+  });
+
+  // Fetch doctor availability
+  const { data: availabilities } = useQuery<DoctorAvailability[]>({
+    queryKey: ["/api/doctor-availability"],
   });
 
   console.log("AdminDoctors render:", { doctors, isLoading, doctorsError });
@@ -171,7 +191,52 @@ export default function AdminDoctors() {
   };
 
   const getDoctorAppointments = (doctorId: string) => {
-    return appointments?.filter((apt) => apt.status !== "cancelled") || [];
+    return (
+      appointments?.filter(
+        (apt) => apt.doctorId === doctorId && apt.status !== "cancelled"
+      ) || []
+    );
+  };
+
+  const getDoctorAvailability = (doctorId: string) => {
+    return availabilities?.filter((avail) => avail.doctorId === doctorId) || [];
+  };
+
+  const calculatePerformanceMetrics = (doctorId: string) => {
+    const doctorAppointments = getDoctorAppointments(doctorId);
+
+    const total = doctorAppointments.length;
+    const completed = doctorAppointments.filter(
+      (a) => a.status === "completed"
+    ).length;
+    const pending = doctorAppointments.filter(
+      (a) => a.status === "pending"
+    ).length;
+    const confirmed = doctorAppointments.filter(
+      (a) => a.status === "confirmed"
+    ).length;
+
+    const completionRate =
+      total > 0 ? Math.round((completed / total) * 100) : 0;
+    const uniquePatients = new Set(doctorAppointments.map((a) => a.patientId))
+      .size;
+
+    // Calculate appointments in last 30 days
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const recentAppointments = doctorAppointments.filter(
+      (a) => new Date(a.createdAt) >= thirtyDaysAgo
+    ).length;
+
+    return {
+      total,
+      completed,
+      pending,
+      confirmed,
+      completionRate,
+      uniquePatients,
+      recentAppointments,
+    };
   };
 
   const handleExport = () => {
@@ -192,8 +257,8 @@ export default function AdminDoctors() {
       "Specialization",
       "Experience (Years)",
       "Qualifications",
-      "Consultation Fee",
       "Availability",
+      "Joined Date",
     ];
     const rows = filteredDoctors.map((d) => [
       `${d.user?.firstName || ""} ${d.user?.lastName || ""}`,
@@ -202,8 +267,8 @@ export default function AdminDoctors() {
       d.specialization,
       d.experienceYears?.toString() || "0",
       d.qualifications || "",
-      d.consultationFee?.toString() || "0",
       d.availability || "Not specified",
+      new Date(d.createdAt).toLocaleDateString(),
     ]);
 
     const csvContent = [
@@ -386,7 +451,7 @@ export default function AdminDoctors() {
                   <TableHead>License No.</TableHead>
                   <TableHead>Specialization</TableHead>
                   <TableHead>Experience</TableHead>
-                  <TableHead>Consultation Fee</TableHead>
+                  <TableHead>Qualifications</TableHead>
                   <TableHead>Availability</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -415,15 +480,21 @@ export default function AdminDoctors() {
                       </TableCell>
                       <TableCell>
                         {doctor.experienceYears ? (
-                          <span>{doctor.experienceYears} years</span>
+                          <span className="flex items-center gap-1">
+                            <Clock className="h-3 w-3 text-muted-foreground" />
+                            {doctor.experienceYears} years
+                          </span>
                         ) : (
                           <span className="text-muted-foreground">—</span>
                         )}
                       </TableCell>
                       <TableCell>
-                        {doctor.consultationFee ? (
-                          <span className="font-medium">
-                            ${Number(doctor.consultationFee).toFixed(2)}
+                        {doctor.qualifications ? (
+                          <span
+                            className="text-sm truncate max-w-[200px] block"
+                            title={doctor.qualifications}
+                          >
+                            {doctor.qualifications}
                           </span>
                         ) : (
                           <span className="text-muted-foreground">—</span>
@@ -456,9 +527,11 @@ export default function AdminDoctors() {
                   <TableRow>
                     <TableCell
                       colSpan={7}
-                      className="text-center text-muted-foreground"
+                      className="text-center text-muted-foreground py-8"
                     >
-                      No doctors found
+                      <Stethoscope className="h-12 w-12 mx-auto mb-2 text-muted-foreground/50" />
+                      <p className="font-medium">No doctors found</p>
+                      <p className="text-sm">Try adjusting your filters</p>
                     </TableCell>
                   </TableRow>
                 )}
@@ -532,22 +605,6 @@ export default function AdminDoctors() {
                   </div>
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-muted-foreground">
-                      Consultation Fee
-                    </label>
-                    <p className="text-lg font-semibold">
-                      ${Number(selectedDoctor.consultationFee || 0).toFixed(2)}
-                    </p>
-                  </div>
-                  <div className="space-y-2 col-span-2">
-                    <label className="text-sm font-medium text-muted-foreground">
-                      Qualifications
-                    </label>
-                    <p className="text-sm">
-                      {selectedDoctor.qualifications || "Not specified"}
-                    </p>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-muted-foreground">
                       Availability Status
                     </label>
                     {selectedDoctor.availability === "available" ? (
@@ -560,12 +617,36 @@ export default function AdminDoctors() {
                       <Badge variant="outline">Not specified</Badge>
                     )}
                   </div>
+                  <div className="space-y-2 col-span-2">
+                    <label className="text-sm font-medium text-muted-foreground">
+                      Qualifications
+                    </label>
+                    <p className="text-sm">
+                      {selectedDoctor.qualifications || "Not specified"}
+                    </p>
+                  </div>
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-muted-foreground">
+                      Username
+                    </label>
+                    <p className="font-mono text-sm">
+                      {selectedDoctor.user?.username || "—"}
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                      <Calendar className="h-4 w-4" />
                       Joined Date
                     </label>
                     <p>
-                      {new Date(selectedDoctor.createdAt).toLocaleDateString()}
+                      {new Date(selectedDoctor.createdAt).toLocaleDateString(
+                        "en-US",
+                        {
+                          year: "numeric",
+                          month: "long",
+                          day: "numeric",
+                        }
+                      )}
                     </p>
                   </div>
                 </div>
@@ -574,114 +655,259 @@ export default function AdminDoctors() {
               <TabsContent value="schedule" className="space-y-4 mt-4">
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-lg">Weekly Schedule</CardTitle>
-                    <CardDescription>
-                      Doctor's availability throughout the week
-                    </CardDescription>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="text-lg">
+                          Availability Schedule
+                        </CardTitle>
+                        <CardDescription>
+                          Doctor's scheduled availability slots
+                        </CardDescription>
+                      </div>
+                      <Badge variant="outline">
+                        {getDoctorAvailability(selectedDoctor.id).length} slots
+                      </Badge>
+                    </div>
                   </CardHeader>
                   <CardContent>
-                    <div className="space-y-3">
-                      {[
-                        "Monday",
-                        "Tuesday",
-                        "Wednesday",
-                        "Thursday",
-                        "Friday",
-                        "Saturday",
-                        "Sunday",
-                      ].map((day) => (
-                        <div
-                          key={day}
-                          className="flex items-center justify-between p-3 border rounded-md"
-                        >
-                          <span className="font-medium">{day}</span>
-                          <span className="text-sm text-muted-foreground">
-                            9:00 AM - 5:00 PM
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="text-sm text-muted-foreground mt-4">
-                      Note: Schedule management feature coming soon
-                    </p>
+                    {getDoctorAvailability(selectedDoctor.id).length > 0 ? (
+                      <div className="space-y-3">
+                        {getDoctorAvailability(selectedDoctor.id)
+                          .sort(
+                            (a, b) =>
+                              new Date(a.availableDate).getTime() -
+                              new Date(b.availableDate).getTime()
+                          )
+                          .slice(0, 10)
+                          .map((avail) => (
+                            <div
+                              key={avail.id}
+                              className="flex items-center justify-between p-3 border rounded-md hover:bg-muted/50 transition-colors"
+                            >
+                              <div className="flex items-center gap-3">
+                                <Calendar className="h-4 w-4 text-muted-foreground" />
+                                <div>
+                                  <p className="font-medium">
+                                    {new Date(
+                                      avail.availableDate
+                                    ).toLocaleDateString("en-US", {
+                                      weekday: "long",
+                                      year: "numeric",
+                                      month: "short",
+                                      day: "numeric",
+                                    })}
+                                  </p>
+                                  <p className="text-sm text-muted-foreground">
+                                    {avail.startTime} - {avail.endTime}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {avail.maxPatients && (
+                                  <Badge variant="secondary">
+                                    {avail.bookedPatients || 0}/
+                                    {avail.maxPatients} patients
+                                  </Badge>
+                                )}
+                                {avail.status === "available" && (
+                                  <Badge className="bg-green-500">
+                                    Available
+                                  </Badge>
+                                )}
+                                {avail.status === "booked" && (
+                                  <Badge variant="destructive">
+                                    Fully Booked
+                                  </Badge>
+                                )}
+                                {avail.status === "finished" && (
+                                  <Badge variant="outline">Finished</Badge>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-8 text-muted-foreground">
+                        <Clock className="h-12 w-12 mx-auto mb-2 text-muted-foreground/50" />
+                        <p className="font-medium">No availability scheduled</p>
+                        <p className="text-sm">
+                          Doctor hasn't set up any availability slots yet
+                        </p>
+                      </div>
+                    )}
+                    {getDoctorAvailability(selectedDoctor.id).length > 10 && (
+                      <p className="text-sm text-muted-foreground mt-4 text-center">
+                        Showing 10 most recent slots. Total:{" "}
+                        {getDoctorAvailability(selectedDoctor.id).length}
+                      </p>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>
 
               <TabsContent value="performance" className="space-y-4 mt-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                        <Calendar className="h-4 w-4" />
-                        Total Appointments
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="text-2xl font-bold">
-                        {getDoctorAppointments(selectedDoctor.id).length}
+                {(() => {
+                  const metrics = calculatePerformanceMetrics(
+                    selectedDoctor.id
+                  );
+                  return (
+                    <>
+                      <div className="grid grid-cols-3 gap-4">
+                        <Card>
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                              <Calendar className="h-4 w-4" />
+                              Total Appointments
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="text-2xl font-bold">
+                              {metrics.total}
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {metrics.recentAppointments} in last 30 days
+                            </p>
+                          </CardContent>
+                        </Card>
+                        <Card>
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                              <Users className="h-4 w-4" />
+                              Unique Patients
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="text-2xl font-bold">
+                              {metrics.uniquePatients}
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Total served
+                            </p>
+                          </CardContent>
+                        </Card>
+                        <Card>
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                              <Activity className="h-4 w-4" />
+                              Completion Rate
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="text-2xl font-bold">
+                              {metrics.completionRate}%
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {metrics.completed} completed
+                            </p>
+                          </CardContent>
+                        </Card>
                       </div>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                        <Users className="h-4 w-4" />
-                        Total Patients
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="text-2xl font-bold">
-                        {
-                          new Set(
-                            getDoctorAppointments(selectedDoctor.id).map(
-                              (a) => a.patient
-                            )
-                          ).size
-                        }
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
 
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg">
-                      Performance Metrics
-                    </CardTitle>
-                    <CardDescription>
-                      Key performance indicators for this doctor
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium">
-                          Patient Satisfaction
-                        </span>
-                        <Badge>4.8/5.0</Badge>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium">
-                          Average Consultation Time
-                        </span>
-                        <Badge variant="secondary">25 mins</Badge>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium">
-                          Completed Appointments
-                        </span>
-                        <Badge variant="outline">
-                          {
-                            getDoctorAppointments(selectedDoctor.id).filter(
-                              (a) => a.status === "completed"
-                            ).length
-                          }
-                        </Badge>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-lg">
+                            Appointment Breakdown
+                          </CardTitle>
+                          <CardDescription>
+                            Current appointment status distribution
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between p-3 border rounded-md">
+                              <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                                <span className="text-sm font-medium">
+                                  Completed
+                                </span>
+                              </div>
+                              <Badge className="bg-green-500">
+                                {metrics.completed}
+                              </Badge>
+                            </div>
+                            <div className="flex items-center justify-between p-3 border rounded-md">
+                              <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                                <span className="text-sm font-medium">
+                                  Confirmed
+                                </span>
+                              </div>
+                              <Badge className="bg-blue-500">
+                                {metrics.confirmed}
+                              </Badge>
+                            </div>
+                            <div className="flex items-center justify-between p-3 border rounded-md">
+                              <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+                                <span className="text-sm font-medium">
+                                  Pending
+                                </span>
+                              </div>
+                              <Badge className="bg-yellow-500">
+                                {metrics.pending}
+                              </Badge>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-lg">
+                            Performance Summary
+                          </CardTitle>
+                          <CardDescription>
+                            Overall statistics and insights
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-medium">
+                                Average Appointments per Month
+                              </span>
+                              <Badge variant="secondary">
+                                {metrics.total > 0
+                                  ? Math.round(metrics.recentAppointments / 1)
+                                  : 0}
+                              </Badge>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-medium">
+                                Patient Retention
+                              </span>
+                              <Badge variant="outline">
+                                {metrics.uniquePatients > 0
+                                  ? Math.round(
+                                      (metrics.total / metrics.uniquePatients) *
+                                        100
+                                    ) / 100
+                                  : 0}
+                                x avg visits
+                              </Badge>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-medium">
+                                Active Status
+                              </span>
+                              <Badge
+                                className={
+                                  metrics.recentAppointments > 0
+                                    ? "bg-green-500"
+                                    : "bg-gray-500"
+                                }
+                              >
+                                {metrics.recentAppointments > 0
+                                  ? "Active"
+                                  : "Inactive"}
+                              </Badge>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </>
+                  );
+                })()}
               </TabsContent>
             </Tabs>
           )}

@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
   Calendar,
@@ -8,14 +9,30 @@ import {
   FlaskConical,
   MessageSquare,
   Receipt,
+  Mail,
+  Phone,
+  MapPin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import hospitalLobby from "@assets/generated_images/Hospital_lobby_hero_background_5209d5e1.png";
 import medicalTeam from "@assets/generated_images/Medical_team_hero_image_7221c5c5.png";
 import { ThemeToggle } from "@/components/theme-toggle";
+import Footer from "@/components/footer";
+
+interface SystemSettings {
+  systemName: string;
+  systemEmail: string;
+  systemPhone: string;
+  systemAddress: string;
+  systemDescription?: string;
+}
 
 export default function Landing() {
+  const { data: settings } = useQuery<SystemSettings>({
+    queryKey: ["/api/admin/settings"],
+    retry: false,
+  });
   const features = [
     {
       icon: Calendar,
@@ -239,8 +256,8 @@ export default function Landing() {
               Ready to Transform Healthcare Management?
             </h2>
             <p className="text-lg text-primary-foreground/90 mb-8 max-w-2xl mx-auto">
-              Join thousands of healthcare professionals and patients using
-              MediVault
+              Join thousands of healthcare professionals and patients using{" "}
+              {settings?.systemName || "MediVault"}
             </p>
             <Button
               size="lg"
@@ -255,21 +272,65 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="py-12 border-t border-border">
-        <div className="container mx-auto px-4 text-center">
-          <div className="flex items-center justify-center gap-2 mb-4">
-            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-primary">
-              <Activity className="w-5 h-5 text-primary-foreground" />
+      {/* Contact Section */}
+      <section className="py-20 bg-muted/50">
+        <div className="container mx-auto px-4">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="max-w-4xl mx-auto"
+          >
+            <h2 className="text-3xl font-bold text-center mb-12">Contact Us</h2>
+            <div className="grid md:grid-cols-3 gap-8">
+              <Card>
+                <CardContent className="p-6 text-center">
+                  <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
+                    <Phone className="w-6 h-6 text-primary" />
+                  </div>
+                  <h3 className="font-semibold mb-2">Phone</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {settings?.systemPhone || "+1-234-567-8900"}
+                  </p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-6 text-center">
+                  <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
+                    <Mail className="w-6 h-6 text-primary" />
+                  </div>
+                  <h3 className="font-semibold mb-2">Email</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {settings?.systemEmail || "admin@medivault.com"}
+                  </p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-6 text-center">
+                  <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
+                    <MapPin className="w-6 h-6 text-primary" />
+                  </div>
+                  <h3 className="font-semibold mb-2">Address</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {settings?.systemAddress ||
+                      "123 Healthcare Ave, Medical City"}
+                  </p>
+                </CardContent>
+              </Card>
             </div>
-            <span className="text-lg font-bold text-foreground">MediVault</span>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            © {new Date().getFullYear()} MediVault. Comprehensive Healthcare
-            Management System.
-          </p>
+            {settings?.systemDescription && (
+              <div className="mt-12 text-center">
+                <p className="text-muted-foreground max-w-2xl mx-auto">
+                  {settings.systemDescription}
+                </p>
+              </div>
+            )}
+          </motion.div>
         </div>
-      </footer>
+      </section>
+
+      {/* Footer */}
+      <Footer />
     </div>
   );
 }

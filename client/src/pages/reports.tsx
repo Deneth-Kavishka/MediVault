@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,8 +36,14 @@ import {
   Users,
   Calendar,
   Activity,
-  DollarSign,
   RefreshCw,
+  Stethoscope,
+  Pill,
+  FlaskConical,
+  FileCheck,
+  Shield,
+  Clock,
+  UserCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -48,18 +60,56 @@ import {
   Tooltip,
   ResponsiveContainer,
   Legend,
+  Area,
+  AreaChart,
 } from "recharts";
 import { useToast } from "@/hooks/use-toast";
+import { format } from "date-fns";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 export default function ReportsPage() {
-  const [reportType, setReportType] = useState("overview");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [filterRole, setFilterRole] = useState("all");
   const [filterAction, setFilterAction] = useState("all");
   const { toast } = useToast();
 
-  // Fetch audit logs
+  // Fetch system settings for PDF header
+  const { data: settings } = useQuery<{
+    systemName: string;
+    systemEmail: string;
+    systemPhone: string;
+    systemAddress: string;
+  }>({
+    queryKey: ["/api/admin/settings"],
+    retry: false,
+  });
+
+  // Fetch all necessary data
+  const {
+    data: appointments,
+    isLoading: appointmentsLoading,
+    refetch: refetchAppointments,
+  } = useQuery<any[]>({
+    queryKey: ["/api/appointments"],
+  });
+
+  const {
+    data: patients,
+    isLoading: patientsLoading,
+    refetch: refetchPatients,
+  } = useQuery<any[]>({
+    queryKey: ["/api/patients"],
+  });
+
+  const {
+    data: doctors,
+    isLoading: doctorsLoading,
+    refetch: refetchDoctors,
+  } = useQuery<any[]>({
+    queryKey: ["/api/doctors"],
+  });
+
   const {
     data: auditLogs,
     isLoading: logsLoading,
@@ -68,46 +118,20 @@ export default function ReportsPage() {
     queryKey: ["/api/admin/activity-timeline"],
   });
 
-  // Fetch stats
-  const {
-    data: stats,
-    isLoading: statsLoading,
-    refetch: refetchStats,
-  } = useQuery<any>({
-    queryKey: ["/api/admin/stats"],
-  });
-
-  // Fetch charts data
-  const {
-    data: revenueChart,
-    isLoading: revenueLoading,
-    refetch: refetchRevenue,
-  } = useQuery<any[]>({
-    queryKey: ["/api/admin/revenue-chart"],
-  });
-
-  const {
-    data: userGrowthChart,
-    isLoading: userGrowthLoading,
-    refetch: refetchUserGrowth,
-  } = useQuery<any[]>({
-    queryKey: ["/api/admin/user-growth-chart"],
-  });
-
   const handleRefreshAll = async () => {
     toast({
       title: "Refreshing Data",
-      description: "Fetching latest reports data...",
+      description: "Fetching latest analytics data...",
     });
     await Promise.all([
+      refetchAppointments(),
+      refetchPatients(),
+      refetchDoctors(),
       refetchLogs(),
-      refetchStats(),
-      refetchRevenue(),
-      refetchUserGrowth(),
     ]);
     toast({
       title: "Data Refreshed",
-      description: "All reports data updated successfully",
+      description: "All analytics data updated successfully",
     });
   };
 
@@ -121,7 +145,6 @@ export default function ReportsPage() {
       return;
     }
 
-    // Create CSV content
     const headers = [
       "Timestamp",
       "Action",
@@ -146,7 +169,6 @@ export default function ReportsPage() {
       ),
     ].join("\n");
 
-    // Download CSV
     const blob = new Blob([csvContent], { type: "text/csv" });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -164,12 +186,235 @@ export default function ReportsPage() {
   };
 
   const handleExportPDF = () => {
-    toast({
-      title: "Generating PDF",
-      description: "Report is being generated as PDF...",
-    });
-    // PDF export will be implemented with a library
+    try {
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      let yPosition = 15;
+
+      // Organization Header
+      doc.setFontSize(16);
+      doc.setTextColor(59, 130, 246);
+      doc.text(
+        settings?.systemName || "MediVault Healthcare System",
+        pageWidth / 2,
+        yPosition,
+        {
+          align: "center",
+        }
+      );
+
+      yPosition += 6;
+      doc.setFontSize(8);
+      doc.setTextColor(100, 100, 100);
+      if (settings?.systemAddress) {
+        doc.text(settings.systemAddress, pageWidth / 2, yPosition, {
+          align: "center",
+        });
+        yPosition += 4;
+      }
+      if (settings?.systemPhone || settings?.systemEmail) {
+        const contactInfo = [settings?.systemPhone, settings?.systemEmail]
+          .filter(Boolean)
+          .join(" | ");
+        doc.text(contactInfo, pageWidth / 2, yPosition, { align: "center" });
+        yPosition += 8;
+      } else {
+        yPosition += 4;
+      }
+
+      // Report Title
+      doc.setFontSize(20);
+      doc.setTextColor(59, 130, 246);
+      doc.text("Analytics Report", pageWidth / 2, yPosition, {
+        align: "center",
+      });
+
+      yPosition += 8;
+      doc.setFontSize(10);
+      doc.setTextColor(100, 100, 100);
+      doc.text(
+        `Generated on ${format(new Date(), "MMMM dd, yyyy 'at' HH:mm")}`,
+        pageWidth / 2,
+        yPosition,
+        { align: "center" }
+      );
+
+      yPosition += 10;
+      doc.setDrawColor(200, 200, 200);
+      doc.line(15, yPosition, pageWidth - 15, yPosition);
+      yPosition += 10;
+
+      // Overview Statistics
+      doc.setFontSize(14);
+      doc.setTextColor(0, 0, 0);
+      doc.text("System Overview", 15, yPosition);
+      yPosition += 10;
+
+      doc.setFontSize(10);
+      const overviewData = [
+        [
+          "Total Patients",
+          stats.totalPatients.toString(),
+          "Active Patients",
+          stats.activePatients.toString(),
+        ],
+        [
+          "Medical Staff",
+          stats.totalDoctors.toString(),
+          "Total Appointments",
+          stats.totalAppointments.toString(),
+        ],
+        [
+          "Completed",
+          stats.completedAppointments.toString(),
+          "Pending",
+          stats.pendingAppointments.toString(),
+        ],
+        [
+          "Confirmed",
+          stats.confirmedAppointments.toString(),
+          "Completion Rate",
+          `${completionRate}%`,
+        ],
+      ];
+
+      autoTable(doc, {
+        startY: yPosition,
+        head: [["Metric", "Value", "Metric", "Value"]],
+        body: overviewData,
+        theme: "grid",
+        headStyles: { fillColor: [59, 130, 246] },
+        margin: { left: 15, right: 15 },
+      });
+
+      yPosition = (doc as any).lastAutoTable.finalY + 15;
+
+      // Appointment Status Breakdown
+      if (yPosition > pageHeight - 60) {
+        doc.addPage();
+        yPosition = 20;
+      }
+
+      doc.setFontSize(14);
+      doc.text("Appointment Status Breakdown", 15, yPosition);
+      yPosition += 10;
+
+      const statusData = [
+        ["Completed", stats.completedAppointments.toString()],
+        ["Confirmed", stats.confirmedAppointments.toString()],
+        ["Pending", stats.pendingAppointments.toString()],
+        ["Cancelled", stats.cancelledAppointments.toString()],
+        ["Total", stats.totalAppointments.toString()],
+      ];
+
+      autoTable(doc, {
+        startY: yPosition,
+        head: [["Status", "Count"]],
+        body: statusData,
+        theme: "striped",
+        headStyles: { fillColor: [59, 130, 246] },
+        margin: { left: 15, right: 15 },
+      });
+
+      yPosition = (doc as any).lastAutoTable.finalY + 15;
+
+      // Audit Logs Summary
+      if (filteredLogs.length > 0) {
+        if (yPosition > pageHeight - 60) {
+          doc.addPage();
+          yPosition = 20;
+        }
+
+        doc.setFontSize(14);
+        doc.text("Audit Logs Summary", 15, yPosition);
+        yPosition += 5;
+
+        doc.setFontSize(9);
+        doc.setTextColor(100, 100, 100);
+        doc.text(
+          `Showing ${Math.min(filteredLogs.length, 20)} most recent entries`,
+          15,
+          yPosition + 5
+        );
+        yPosition += 10;
+
+        const auditData = filteredLogs
+          .slice(0, 20)
+          .map((log: any) => [
+            format(new Date(log.createdAt), "MM/dd/yy HH:mm"),
+            log.action,
+            log.entityType || "system",
+            log.userId?.slice(0, 8) || "System",
+          ]);
+
+        autoTable(doc, {
+          startY: yPosition,
+          head: [["Timestamp", "Action", "Entity", "User ID"]],
+          body: auditData,
+          theme: "grid",
+          headStyles: { fillColor: [59, 130, 246] },
+          margin: { left: 15, right: 15 },
+          styles: { fontSize: 8 },
+        });
+      }
+
+      // Footer on last page
+      const totalPages = (doc as any).internal.pages.length - 1;
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setTextColor(150, 150, 150);
+        doc.text(
+          `Page ${i} of ${totalPages} | MediVault Medical Management System`,
+          pageWidth / 2,
+          pageHeight - 10,
+          { align: "center" }
+        );
+      }
+
+      // Save PDF
+      doc.save(
+        `MediVault-Analytics-Report-${format(new Date(), "yyyy-MM-dd")}.pdf`
+      );
+
+      toast({
+        title: "Export Successful",
+        description: "Analytics report exported to PDF",
+      });
+    } catch (error) {
+      console.error("PDF export error:", error);
+      toast({
+        title: "Export Failed",
+        description: "Failed to generate PDF report",
+        variant: "destructive",
+      });
+    }
   };
+
+  // Calculate statistics
+  const stats = {
+    totalPatients: patients?.length || 0,
+    activePatients: patients?.filter((p: any) => p.isActive).length || 0,
+    totalDoctors: doctors?.length || 0,
+    totalAppointments: appointments?.length || 0,
+    completedAppointments:
+      appointments?.filter((a: any) => a.status === "completed").length || 0,
+    pendingAppointments:
+      appointments?.filter((a: any) => a.status === "pending").length || 0,
+    confirmedAppointments:
+      appointments?.filter((a: any) => a.status === "confirmed").length || 0,
+    cancelledAppointments:
+      appointments?.filter((a: any) => a.status === "cancelled").length || 0,
+  };
+
+  // Calculate completion rate
+  const completionRate =
+    stats.totalAppointments > 0
+      ? Math.round(
+          (stats.completedAppointments / stats.totalAppointments) * 100
+        )
+      : 0;
 
   // Filter audit logs
   const filteredLogs =
@@ -192,37 +437,97 @@ export default function ReportsPage() {
     "hsl(var(--chart-2))",
     "hsl(var(--chart-3))",
     "hsl(var(--chart-4))",
+    "hsl(var(--chart-5))",
   ];
 
-  // User distribution by role
-  const userRoleData = [
-    { name: "Patients", value: stats?.activePatients || 0 },
-    { name: "Doctors", value: stats?.totalDoctors || 0 },
-    { name: "Pharmacists", value: stats?.totalPharmacists || 0 },
-    { name: "Lab Techs", value: stats?.totalLabTechs || 0 },
-  ];
-
-  // Appointment status data
+  // Appointment status distribution
   const appointmentStatusData = [
-    { name: "Pending", value: stats?.pendingAppointments || 0 },
-    { name: "Completed", value: stats?.completedAppointments || 0 },
-  ];
+    { name: "Completed", value: stats.completedAppointments, color: "#10b981" },
+    { name: "Confirmed", value: stats.confirmedAppointments, color: "#3b82f6" },
+    { name: "Pending", value: stats.pendingAppointments, color: "#f59e0b" },
+    { name: "Cancelled", value: stats.cancelledAppointments, color: "#ef4444" },
+  ].filter((item) => item.value > 0);
+
+  // Calculate appointments trend (last 14 days)
+  const appointmentsTrend = (() => {
+    if (!appointments) return [];
+    const fourteenDaysAgo = new Date();
+    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+
+    const appointmentsByDate = new Map<string, number>();
+    const allDates: string[] = [];
+
+    // Generate all dates for last 14 days
+    for (let i = 13; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      const dateStr = format(date, "MMM dd");
+      allDates.push(dateStr);
+      appointmentsByDate.set(dateStr, 0);
+    }
+
+    appointments
+      .filter((a: any) => new Date(a.createdAt) >= fourteenDaysAgo)
+      .forEach((a: any) => {
+        const date = format(new Date(a.createdAt), "MMM dd");
+        appointmentsByDate.set(date, (appointmentsByDate.get(date) || 0) + 1);
+      });
+
+    return allDates.map((date) => ({
+      date,
+      appointments: appointmentsByDate.get(date) || 0,
+    }));
+  })();
+
+  // Doctor workload distribution
+  const doctorWorkload = (() => {
+    if (!appointments || !doctors) return [];
+    const workloadMap = new Map<string, { name: string; count: number }>();
+
+    appointments.forEach((apt: any) => {
+      if (apt.doctorId) {
+        const existing = workloadMap.get(apt.doctorId);
+        if (existing) {
+          existing.count++;
+        } else {
+          const doctor = doctors.find((d: any) => d.id === apt.doctorId);
+          const name = doctor?.user
+            ? `Dr. ${doctor.user.firstName} ${doctor.user.lastName}`
+            : "Unknown";
+          workloadMap.set(apt.doctorId, { name, count: 1 });
+        }
+      }
+    });
+
+    return Array.from(workloadMap.values())
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5); // Top 5 doctors
+  })();
+
+  const isLoading = appointmentsLoading || patientsLoading || doctorsLoading;
 
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">
+          <h1 className="text-3xl font-bold text-foreground flex items-center gap-3">
+            <BarChart3 className="h-8 w-8 text-primary" />
             Reports & Analytics
           </h1>
-          <p className="text-muted-foreground">
-            View system audit logs and generate custom reports
+          <p className="text-muted-foreground mt-1">
+            Comprehensive medical system analytics and audit logs
           </p>
         </div>
         <div className="flex gap-3">
-          <Button variant="outline" onClick={handleRefreshAll}>
-            <RefreshCw className="w-4 h-4 mr-2" />
+          <Button
+            variant="outline"
+            onClick={handleRefreshAll}
+            disabled={isLoading}
+          >
+            <RefreshCw
+              className={`w-4 h-4 mr-2 ${isLoading ? "animate-spin" : ""}`}
+            />
             Refresh
           </Button>
           <Button variant="outline" onClick={handleExportCSV}>
@@ -236,67 +541,6 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      {/* Filters */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Filter className="w-5 h-5" />
-            Filters
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-4">
-            <div className="space-y-2">
-              <Label htmlFor="dateFrom">Date From</Label>
-              <Input
-                id="dateFrom"
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="dateTo">Date To</Label>
-              <Input
-                id="dateTo"
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="action">Action Type</Label>
-              <Select value={filterAction} onValueChange={setFilterAction}>
-                <SelectTrigger id="action">
-                  <SelectValue placeholder="All Actions" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Actions</SelectItem>
-                  <SelectItem value="create">Create</SelectItem>
-                  <SelectItem value="update">Update</SelectItem>
-                  <SelectItem value="delete">Delete</SelectItem>
-                  <SelectItem value="login">Login</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="reportType">Report Type</Label>
-              <Select value={reportType} onValueChange={setReportType}>
-                <SelectTrigger id="reportType">
-                  <SelectValue placeholder="Select Type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="overview">System Overview</SelectItem>
-                  <SelectItem value="audit">Audit Logs</SelectItem>
-                  <SelectItem value="revenue">Revenue Report</SelectItem>
-                  <SelectItem value="users">User Analytics</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
       {/* Tabs for different views */}
       <Tabs defaultValue="overview" className="space-y-4">
         <TabsList>
@@ -304,43 +548,50 @@ export default function ReportsPage() {
             <BarChart3 className="w-4 h-4 mr-2" />
             Overview
           </TabsTrigger>
-          <TabsTrigger value="audit">
-            <Activity className="w-4 h-4 mr-2" />
-            Audit Logs
-          </TabsTrigger>
           <TabsTrigger value="charts">
             <TrendingUp className="w-4 h-4 mr-2" />
             Charts & Trends
+          </TabsTrigger>
+          <TabsTrigger value="audit">
+            <Shield className="w-4 h-4 mr-2" />
+            Audit Logs
           </TabsTrigger>
         </TabsList>
 
         {/* Overview Tab */}
         <TabsContent value="overview" className="space-y-6">
-          <div className="grid gap-6 md:grid-cols-4">
+          {/* Key Metrics */}
+          <div className="grid gap-4 md:grid-cols-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">
-                  Total Users
+                  Total Patients
                 </CardTitle>
                 <Users className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {statsLoading ? "..." : stats?.totalUsers || 0}
+                  {isLoading ? "..." : stats.totalPatients}
                 </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {stats.activePatients} active
+                </p>
               </CardContent>
             </Card>
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">
-                  Active Patients
+                  Medical Staff
                 </CardTitle>
-                <Users className="h-4 w-4 text-muted-foreground" />
+                <Stethoscope className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {statsLoading ? "..." : stats?.activePatients || 0}
+                  {isLoading ? "..." : stats.totalDoctors}
                 </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Active doctors
+                </p>
               </CardContent>
             </Card>
             <Card>
@@ -352,60 +603,39 @@ export default function ReportsPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {statsLoading ? "..." : stats?.totalAppointments || 0}
+                  {isLoading ? "..." : stats.totalAppointments}
                 </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {stats.pendingAppointments} pending
+                </p>
               </CardContent>
             </Card>
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Pending</CardTitle>
-                <Activity className="h-4 w-4 text-muted-foreground" />
+                <CardTitle className="text-sm font-medium">
+                  Completion Rate
+                </CardTitle>
+                <UserCheck className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {statsLoading ? "..." : stats?.pendingAppointments || 0}
+                  {isLoading ? "..." : `${completionRate}%`}
                 </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {stats.completedAppointments} completed
+                </p>
               </CardContent>
             </Card>
           </div>
 
-          {/* Distribution Charts */}
+          {/* Status Breakdown */}
           <div className="grid gap-6 md:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle>Users by Role</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={userRoleData}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, percent }) =>
-                        `${name}: ${(percent * 100).toFixed(0)}%`
-                      }
-                      outerRadius={80}
-                      fill="#8884d8"
-                      dataKey="value"
-                    >
-                      {userRoleData.map((entry, index) => (
-                        <Cell
-                          key={`cell-${index}`}
-                          fill={COLORS[index % COLORS.length]}
-                        />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Appointment Status</CardTitle>
+                <CardTitle>Appointment Status Distribution</CardTitle>
+                <CardDescription>
+                  Current breakdown of all appointments by status
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={300}>
@@ -423,10 +653,7 @@ export default function ReportsPage() {
                       dataKey="value"
                     >
                       {appointmentStatusData.map((entry, index) => (
-                        <Cell
-                          key={`cell-${index}`}
-                          fill={COLORS[index % COLORS.length]}
-                        />
+                        <Cell key={`cell-${index}`} fill={entry.color} />
                       ))}
                     </Pie>
                     <Tooltip />
@@ -434,17 +661,242 @@ export default function ReportsPage() {
                 </ResponsiveContainer>
               </CardContent>
             </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>System Activity Summary</CardTitle>
+                <CardDescription>Real-time system statistics</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-3 border rounded-md">
+                    <div className="flex items-center gap-3">
+                      <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                      <span className="text-sm font-medium">
+                        Completed Appointments
+                      </span>
+                    </div>
+                    <Badge className="bg-green-500">
+                      {stats.completedAppointments}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center justify-between p-3 border rounded-md">
+                    <div className="flex items-center gap-3">
+                      <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                      <span className="text-sm font-medium">
+                        Confirmed Appointments
+                      </span>
+                    </div>
+                    <Badge className="bg-blue-500">
+                      {stats.confirmedAppointments}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center justify-between p-3 border rounded-md">
+                    <div className="flex items-center gap-3">
+                      <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+                      <span className="text-sm font-medium">
+                        Pending Appointments
+                      </span>
+                    </div>
+                    <Badge className="bg-yellow-500">
+                      {stats.pendingAppointments}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center justify-between p-3 border rounded-md">
+                    <div className="flex items-center gap-3">
+                      <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                      <span className="text-sm font-medium">
+                        Cancelled Appointments
+                      </span>
+                    </div>
+                    <Badge className="bg-red-500">
+                      {stats.cancelledAppointments}
+                    </Badge>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           </div>
         </TabsContent>
 
-        {/* Audit Logs Tab */}
-        <TabsContent value="audit">
+        {/* Charts Tab */}
+        <TabsContent value="charts" className="space-y-6">
+          {/* Appointment Trend */}
           <Card>
             <CardHeader>
-              <CardTitle>System Audit Logs</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                {filteredLogs.length} records found
-              </p>
+              <CardTitle className="flex items-center gap-2">
+                <TrendingUp className="w-5 h-5" />
+                Appointment Trends (Last 14 Days)
+              </CardTitle>
+              <CardDescription>
+                Daily appointment creation over the past two weeks
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  Loading chart data...
+                </div>
+              ) : appointmentsTrend.length > 0 ? (
+                <ResponsiveContainer width="100%" height={350}>
+                  <AreaChart data={appointmentsTrend}>
+                    <defs>
+                      <linearGradient
+                        id="colorAppointments"
+                        x1="0"
+                        y1="0"
+                        x2="0"
+                        y2="1"
+                      >
+                        <stop
+                          offset="5%"
+                          stopColor="hsl(var(--chart-1))"
+                          stopOpacity={0.8}
+                        />
+                        <stop
+                          offset="95%"
+                          stopColor="hsl(var(--chart-1))"
+                          stopOpacity={0}
+                        />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+                    <YAxis tick={{ fontSize: 12 }} />
+                    <Tooltip />
+                    <Legend />
+                    <Area
+                      type="monotone"
+                      dataKey="appointments"
+                      stroke="hsl(var(--chart-1))"
+                      fillOpacity={1}
+                      fill="url(#colorAppointments)"
+                      name="Appointments"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="text-center py-12 text-muted-foreground">
+                  No appointment data available
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Doctor Workload */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Stethoscope className="w-5 h-5" />
+                Doctor Workload Distribution
+              </CardTitle>
+              <CardDescription>
+                Top 5 doctors by total appointments
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  Loading chart data...
+                </div>
+              ) : doctorWorkload.length > 0 ? (
+                <ResponsiveContainer width="100%" height={350}>
+                  <BarChart data={doctorWorkload}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="name"
+                      tick={{ fontSize: 12 }}
+                      angle={-15}
+                      textAnchor="end"
+                      height={80}
+                    />
+                    <YAxis tick={{ fontSize: 12 }} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar
+                      dataKey="count"
+                      fill="hsl(var(--chart-2))"
+                      name="Total Appointments"
+                      radius={[8, 8, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="text-center py-12 text-muted-foreground">
+                  No workload data available
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Audit Logs Tab */}
+        <TabsContent value="audit" className="space-y-4">
+          {/* Filters for Audit Logs */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Filter className="w-5 h-5" />
+                Filter Audit Logs
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="space-y-2">
+                  <Label htmlFor="dateFrom">Date From</Label>
+                  <Input
+                    id="dateFrom"
+                    type="date"
+                    value={dateFrom}
+                    onChange={(e) => setDateFrom(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="dateTo">Date To</Label>
+                  <Input
+                    id="dateTo"
+                    type="date"
+                    value={dateTo}
+                    onChange={(e) => setDateTo(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="action">Action Type</Label>
+                  <Select value={filterAction} onValueChange={setFilterAction}>
+                    <SelectTrigger id="action">
+                      <SelectValue placeholder="All Actions" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Actions</SelectItem>
+                      <SelectItem value="create">Create</SelectItem>
+                      <SelectItem value="update">Update</SelectItem>
+                      <SelectItem value="delete">Delete</SelectItem>
+                      <SelectItem value="login">Login</SelectItem>
+                      <SelectItem value="access">Access</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Shield className="w-5 h-5" />
+                    System Audit Logs
+                  </CardTitle>
+                  <CardDescription className="mt-1">
+                    {filteredLogs.length} audit records found
+                  </CardDescription>
+                </div>
+                <Badge variant="outline" className="text-sm">
+                  <Activity className="w-3 h-3 mr-1" />
+                  Security Tracking
+                </Badge>
+              </div>
             </CardHeader>
             <CardContent>
               <ScrollArea className="h-[600px]">
@@ -462,21 +914,30 @@ export default function ReportsPage() {
                   <TableBody>
                     {logsLoading ? (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center">
-                          Loading...
+                        <TableCell colSpan={6} className="text-center py-8">
+                          <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-muted-foreground" />
+                          Loading audit logs...
                         </TableCell>
                       </TableRow>
                     ) : filteredLogs.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center">
-                          No audit logs found
+                        <TableCell
+                          colSpan={6}
+                          className="text-center py-8 text-muted-foreground"
+                        >
+                          <Shield className="w-12 h-12 mx-auto mb-2 text-muted-foreground/50" />
+                          <p className="font-medium">No audit logs found</p>
+                          <p className="text-sm">Try adjusting your filters</p>
                         </TableCell>
                       </TableRow>
                     ) : (
                       filteredLogs.map((log: any, index: number) => (
                         <TableRow key={log.id || index}>
                           <TableCell className="text-sm">
-                            {new Date(log.createdAt).toLocaleString()}
+                            {format(
+                              new Date(log.createdAt),
+                              "MMM dd, yyyy HH:mm:ss"
+                            )}
                           </TableCell>
                           <TableCell className="font-medium">
                             {log.action}
@@ -486,7 +947,7 @@ export default function ReportsPage() {
                               {log.entityType || "system"}
                             </Badge>
                           </TableCell>
-                          <TableCell className="text-sm">
+                          <TableCell className="text-sm font-mono">
                             {log.userId?.slice(0, 8) || "System"}
                           </TableCell>
                           <TableCell className="max-w-md truncate text-sm">
@@ -517,106 +978,6 @@ export default function ReportsPage() {
                   </TableBody>
                 </Table>
               </ScrollArea>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Charts Tab */}
-        <TabsContent value="charts" className="space-y-6">
-          {/* Revenue Chart */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <DollarSign className="w-5 h-5" />
-                Revenue Trends (Last 30 Days)
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {revenueLoading ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  Loading chart data...
-                </div>
-              ) : revenueChart && revenueChart.length > 0 ? (
-                <ResponsiveContainer width="100%" height={350}>
-                  <LineChart data={revenueChart}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                      dataKey="date"
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(value) => {
-                        const date = new Date(value);
-                        return `${date.getMonth() + 1}/${date.getDate()}`;
-                      }}
-                    />
-                    <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip
-                      formatter={(value: any) => [
-                        `$${value.toFixed(2)}`,
-                        "Revenue",
-                      ]}
-                      labelFormatter={(label) => `Date: ${label}`}
-                    />
-                    <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="revenue"
-                      stroke="hsl(var(--chart-1))"
-                      strokeWidth={2}
-                      name="Daily Revenue"
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="text-center py-12 text-muted-foreground">
-                  No revenue data available
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* User Growth Chart */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Users className="w-5 h-5" />
-                User Growth (Last 12 Months)
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {userGrowthLoading ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  Loading chart data...
-                </div>
-              ) : userGrowthChart && userGrowthChart.length > 0 ? (
-                <ResponsiveContainer width="100%" height={350}>
-                  <BarChart data={userGrowthChart}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                      dataKey="month"
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(value) => {
-                        const [year, month] = value.split("-");
-                        return `${month}/${year.slice(2)}`;
-                      }}
-                    />
-                    <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip
-                      formatter={(value: any) => [value, "New Users"]}
-                      labelFormatter={(label) => `Month: ${label}`}
-                    />
-                    <Legend />
-                    <Bar
-                      dataKey="users"
-                      fill="hsl(var(--chart-2))"
-                      name="New Users"
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="text-center py-12 text-muted-foreground">
-                  No user growth data available
-                </div>
-              )}
             </CardContent>
           </Card>
         </TabsContent>

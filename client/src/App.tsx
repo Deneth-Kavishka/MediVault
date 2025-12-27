@@ -22,12 +22,15 @@ import AdminUsers from "@/pages/admin-users";
 import AdminDoctorAvailability from "@/pages/admin-doctor-availability";
 import AdminPatients from "@/pages/admin-patients";
 import DoctorPatients from "@/pages/doctor-patients";
+import DoctorMedicalRecords from "@/pages/doctor-medical-records";
 import DoctorAvailability from "@/pages/doctor-availability";
+import LabTests from "@/pages/lab-tests";
 import FindDoctors from "@/pages/find-doctors";
 import AdminDoctors from "@/pages/admin-doctors";
 import AdminAppointments from "@/pages/admin-appointments";
 import ReportsPage from "@/pages/reports";
 import SettingsPage from "@/pages/settings";
+import ContactPage from "@/pages/contact";
 import { useEffect } from "react";
 
 function Router() {
@@ -92,6 +95,7 @@ function Router() {
       {/* Public routes */}
       <Route path="/" component={Landing} />
       <Route path="/login" component={LoginPage} />
+      <Route path="/contact" component={ContactPage} />
 
       {/* Protected routes */}
       <Route path="/dashboard" component={Dashboard} />
@@ -101,10 +105,11 @@ function Router() {
       <Route path="/messages" component={Messages} />
       <Route path="/notifications" component={Notifications} />
       <Route path="/lab-results" component={Dashboard} />
-      <Route path="/lab-tests" component={Dashboard} />
+      <Route path="/lab-tests" component={LabTests} />
       <Route path="/bills" component={Dashboard} />
       <Route path="/patients" component={AdminPatients} />
       <Route path="/doctor/patients" component={DoctorPatients} />
+      <Route path="/doctor/medical-records" component={DoctorMedicalRecords} />
       <Route path="/doctors" component={AdminDoctors} />
       <Route path="/appointments-admin" component={AdminAppointments} />
       <Route path="/inventory" component={Dashboard} />

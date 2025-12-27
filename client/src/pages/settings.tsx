@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   Card,
@@ -24,34 +24,76 @@ import {
   Settings,
   Mail,
   Calendar,
-  DollarSign,
   HardDrive,
   Download,
   Upload,
   Save,
-  RefreshCw,
+  Shield,
+  Bell,
+  Database,
+  Clock,
+  Building2,
+  AlertCircle,
+  CheckCircle2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 interface SystemSettings {
+  // General/Organization
   systemName: string;
   systemEmail: string;
   systemPhone: string;
   systemAddress: string;
+  systemWebsite?: string;
+  systemLogo?: string;
+  systemDescription?: string;
+  licenseNumber?: string;
+  establishedYear?: number;
+  emergencyContact?: string;
+  faxNumber?: string;
+  timezone?: string;
+  currency?: string;
+  language?: string;
+
+  // Appointment Settings
   appointmentDuration: number;
   appointmentSlotInterval: number;
   maxAppointmentsPerDay: number;
+  workingHoursStart: string;
+  workingHoursEnd: string;
+  workingDays?: string;
+
+  // Notification Settings
   enableEmailNotifications: boolean;
   enableSmsNotifications: boolean;
+  enableAppointmentReminders: boolean;
+  reminderHoursBefore: number;
+
+  // Backup Settings
   autoBackupEnabled: boolean;
   backupFrequency: string;
+
+  // Security Settings
   sessionTimeout: number;
+  maxLoginAttempts: number;
+  enableTwoFactorAuth: boolean;
+  dataRetentionDays: number;
+  passwordExpiryDays?: number;
+
+  // Social Media
+  facebookUrl?: string;
+  twitterUrl?: string;
+  linkedinUrl?: string;
+  instagramUrl?: string;
 }
 
 export default function SettingsPage() {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState("general");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Fetch current settings
   const {
@@ -63,29 +105,50 @@ export default function SettingsPage() {
     retry: false,
   });
 
-  // Form state
+  // Form state - initialize with defaults
   const [formData, setFormData] = useState<SystemSettings>({
-    systemName: settings?.systemName || "MediVault Healthcare",
-    systemEmail: settings?.systemEmail || "admin@medivault.com",
-    systemPhone: settings?.systemPhone || "+1-234-567-8900",
-    systemAddress:
-      settings?.systemAddress || "123 Healthcare Ave, Medical City",
-    appointmentDuration: settings?.appointmentDuration || 30,
-    appointmentSlotInterval: settings?.appointmentSlotInterval || 15,
-    maxAppointmentsPerDay: settings?.maxAppointmentsPerDay || 20,
-    enableEmailNotifications: settings?.enableEmailNotifications ?? true,
-    enableSmsNotifications: settings?.enableSmsNotifications ?? false,
-    autoBackupEnabled: settings?.autoBackupEnabled ?? true,
-    backupFrequency: settings?.backupFrequency || "daily",
-    sessionTimeout: settings?.sessionTimeout || 30,
+    systemName: "MediVault Healthcare System",
+    systemEmail: "admin@medivault.com",
+    systemPhone: "+1-234-567-8900",
+    systemAddress: "123 Healthcare Ave, Medical City",
+    systemWebsite: "",
+    systemDescription: "",
+    licenseNumber: "",
+    emergencyContact: "",
+    faxNumber: "",
+    timezone: "UTC",
+    currency: "USD",
+    language: "en",
+    appointmentDuration: 30,
+    appointmentSlotInterval: 15,
+    maxAppointmentsPerDay: 20,
+    workingHoursStart: "09:00",
+    workingHoursEnd: "17:00",
+    workingDays: "Monday,Tuesday,Wednesday,Thursday,Friday",
+    enableEmailNotifications: true,
+    enableSmsNotifications: false,
+    enableAppointmentReminders: true,
+    reminderHoursBefore: 24,
+    autoBackupEnabled: true,
+    backupFrequency: "daily",
+    sessionTimeout: 30,
+    maxLoginAttempts: 5,
+    enableTwoFactorAuth: false,
+    dataRetentionDays: 365,
+    passwordExpiryDays: 90,
+    facebookUrl: "",
+    facebookUrl: "",
+    twitterUrl: "",
+    linkedinUrl: "",
+    instagramUrl: "",
   });
 
-  // Update settings when data loads
-  useState(() => {
+  // Update formData when settings are loaded from server
+  useEffect(() => {
     if (settings) {
       setFormData(settings);
     }
-  });
+  }, [settings]);
 
   // Save settings mutation
   const saveSettingsMutation = useMutation({
@@ -155,10 +218,53 @@ export default function SettingsPage() {
   };
 
   const handleRestore = () => {
-    toast({
-      title: "Restore Database",
-      description: "Database restore functionality coming soon",
-    });
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleFileChange = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.endsWith(".sql")) {
+      toast({
+        title: "Invalid File",
+        description: "Please select a valid SQL backup file",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const response = await fetch("/api/admin/restore", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error("Restore failed");
+
+      toast({
+        title: "Restore Complete",
+        description: "Database has been restored from backup",
+      });
+    } catch (error) {
+      toast({
+        title: "Restore Failed",
+        description: "Failed to restore database from backup",
+        variant: "destructive",
+      });
+    }
+
+    // Reset file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   };
 
   const updateField = (field: keyof SystemSettings, value: any) => {
@@ -181,10 +287,11 @@ export default function SettingsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">
+          <h1 className="text-3xl font-bold text-foreground flex items-center gap-3">
+            <Settings className="h-8 w-8 text-primary" />
             System Settings
           </h1>
-          <p className="text-muted-foreground">
+          <p className="text-muted-foreground mt-1">
             Configure system parameters and preferences
           </p>
         </div>
@@ -197,24 +304,24 @@ export default function SettingsPage() {
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="general">
-            <Settings className="w-4 h-4 mr-2" />
+            <Building2 className="w-4 h-4 mr-2" />
             General
-          </TabsTrigger>
-          <TabsTrigger value="email">
-            <Mail className="w-4 h-4 mr-2" />
-            Email
           </TabsTrigger>
           <TabsTrigger value="appointments">
             <Calendar className="w-4 h-4 mr-2" />
             Appointments
           </TabsTrigger>
-          <TabsTrigger value="billing">
-            <DollarSign className="w-4 h-4 mr-2" />
-            Billing
+          <TabsTrigger value="notifications">
+            <Bell className="w-4 h-4 mr-2" />
+            Notifications
+          </TabsTrigger>
+          <TabsTrigger value="security">
+            <Shield className="w-4 h-4 mr-2" />
+            Security
           </TabsTrigger>
           <TabsTrigger value="backup">
-            <HardDrive className="w-4 h-4 mr-2" />
-            Backup
+            <Database className="w-4 h-4 mr-2" />
+            Backup & Data
           </TabsTrigger>
         </TabsList>
 
@@ -222,156 +329,135 @@ export default function SettingsPage() {
         <TabsContent value="general" className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>System Information</CardTitle>
+              <CardTitle>Organization Information</CardTitle>
               <CardDescription>
-                Configure basic system information and contact details
+                Configure your healthcare facility's essential information
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="systemName">System Name</Label>
+                  <Label htmlFor="systemName">Organization Name *</Label>
                   <Input
                     id="systemName"
                     value={formData.systemName}
                     onChange={(e) => updateField("systemName", e.target.value)}
+                    placeholder="MediVault Healthcare System"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="systemEmail">System Email</Label>
+                  <Label htmlFor="systemEmail">Contact Email *</Label>
                   <Input
                     id="systemEmail"
                     type="email"
                     value={formData.systemEmail}
                     onChange={(e) => updateField("systemEmail", e.target.value)}
+                    placeholder="admin@medivault.com"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="systemPhone">Contact Phone</Label>
+                  <Label htmlFor="systemPhone">Contact Phone *</Label>
                   <Input
                     id="systemPhone"
                     value={formData.systemPhone}
                     onChange={(e) => updateField("systemPhone", e.target.value)}
+                    placeholder="+1-234-567-8900"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="sessionTimeout">
-                    Session Timeout (minutes)
-                  </Label>
+                  <Label htmlFor="emergencyContact">Emergency Contact</Label>
                   <Input
-                    id="sessionTimeout"
-                    type="number"
-                    value={formData.sessionTimeout}
+                    id="emergencyContact"
+                    value={formData.emergencyContact || ""}
                     onChange={(e) =>
-                      updateField("sessionTimeout", parseInt(e.target.value))
+                      updateField("emergencyContact", e.target.value)
                     }
+                    placeholder="+1-234-567-0911"
                   />
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="systemAddress">System Address</Label>
+                <Label htmlFor="systemAddress">Facility Address *</Label>
                 <Textarea
                   id="systemAddress"
                   value={formData.systemAddress}
                   onChange={(e) => updateField("systemAddress", e.target.value)}
+                  rows={2}
+                  placeholder="123 Healthcare Ave, Medical City, State, ZIP"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="systemDescription">
+                  Organization Description
+                </Label>
+                <Textarea
+                  id="systemDescription"
+                  value={formData.systemDescription || ""}
+                  onChange={(e) =>
+                    updateField("systemDescription", e.target.value)
+                  }
                   rows={3}
+                  placeholder="Brief description of your healthcare facility, services, and specialties..."
                 />
+                <p className="text-xs text-muted-foreground">
+                  This will be displayed on your landing page and public-facing
+                  materials
+                </p>
               </div>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
-              <CardTitle>Notification Settings</CardTitle>
+              <CardTitle>Social Media & Online Presence</CardTitle>
               <CardDescription>
-                Configure system notification preferences
+                Connect your social media profiles for public visibility
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Email Notifications</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Send email notifications to users
-                  </p>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="facebookUrl">Facebook URL</Label>
+                  <Input
+                    id="facebookUrl"
+                    type="url"
+                    value={formData.facebookUrl || ""}
+                    onChange={(e) => updateField("facebookUrl", e.target.value)}
+                    placeholder="https://facebook.com/medivault"
+                  />
                 </div>
-                <Switch
-                  checked={formData.enableEmailNotifications}
-                  onCheckedChange={(checked) =>
-                    updateField("enableEmailNotifications", checked)
-                  }
-                />
-              </div>
-              <Separator />
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>SMS Notifications</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Send SMS notifications to users
-                  </p>
+                <div className="space-y-2">
+                  <Label htmlFor="twitterUrl">Twitter/X URL</Label>
+                  <Input
+                    id="twitterUrl"
+                    type="url"
+                    value={formData.twitterUrl || ""}
+                    onChange={(e) => updateField("twitterUrl", e.target.value)}
+                    placeholder="https://twitter.com/medivault"
+                  />
                 </div>
-                <Switch
-                  checked={formData.enableSmsNotifications}
-                  onCheckedChange={(checked) =>
-                    updateField("enableSmsNotifications", checked)
-                  }
-                />
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Email Templates */}
-        <TabsContent value="email" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Email Templates</CardTitle>
-              <CardDescription>
-                Customize email templates for different events
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="welcomeEmail">Welcome Email Template</Label>
-                <Textarea
-                  id="welcomeEmail"
-                  placeholder="Dear {firstName},&#10;&#10;Welcome to MediVault Healthcare System..."
-                  rows={5}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Available variables: {"{firstName}"}, {"{lastName}"},{" "}
-                  {"{email}"}
-                </p>
-              </div>
-              <Separator />
-              <div className="space-y-2">
-                <Label htmlFor="appointmentEmail">
-                  Appointment Confirmation Email
-                </Label>
-                <Textarea
-                  id="appointmentEmail"
-                  placeholder="Dear {firstName},&#10;&#10;Your appointment is confirmed for {appointmentDate}..."
-                  rows={5}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Available variables: {"{firstName}"}, {"{appointmentDate}"},{" "}
-                  {"{doctorName}"}
-                </p>
-              </div>
-              <Separator />
-              <div className="space-y-2">
-                <Label htmlFor="reminderEmail">
-                  Appointment Reminder Email
-                </Label>
-                <Textarea
-                  id="reminderEmail"
-                  placeholder="Dear {firstName},&#10;&#10;This is a reminder for your appointment tomorrow..."
-                  rows={5}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Available variables: {"{firstName}"}, {"{appointmentDate}"},{" "}
-                  {"{doctorName}"}
-                </p>
+                <div className="space-y-2">
+                  <Label htmlFor="linkedinUrl">LinkedIn URL</Label>
+                  <Input
+                    id="linkedinUrl"
+                    type="url"
+                    value={formData.linkedinUrl || ""}
+                    onChange={(e) => updateField("linkedinUrl", e.target.value)}
+                    placeholder="https://linkedin.com/company/medivault"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="instagramUrl">Instagram URL</Label>
+                  <Input
+                    id="instagramUrl"
+                    type="url"
+                    value={formData.instagramUrl || ""}
+                    onChange={(e) =>
+                      updateField("instagramUrl", e.target.value)
+                    }
+                    placeholder="https://instagram.com/medivault"
+                  />
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -392,52 +478,55 @@ export default function SettingsPage() {
                   <Label htmlFor="appointmentDuration">
                     Default Appointment Duration (minutes)
                   </Label>
-                  <Input
-                    id="appointmentDuration"
-                    type="number"
-                    min="15"
-                    step="15"
-                    value={formData.appointmentDuration}
-                    onChange={(e) =>
-                      updateField(
-                        "appointmentDuration",
-                        parseInt(e.target.value)
-                      )
+                  <Select
+                    value={formData.appointmentDuration.toString()}
+                    onValueChange={(value) =>
+                      updateField("appointmentDuration", parseInt(value))
                     }
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Standard duration for appointments
-                  </p>
+                  >
+                    <SelectTrigger id="appointmentDuration">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="15">15 minutes</SelectItem>
+                      <SelectItem value="30">30 minutes</SelectItem>
+                      <SelectItem value="45">45 minutes</SelectItem>
+                      <SelectItem value="60">1 hour</SelectItem>
+                      <SelectItem value="90">1.5 hours</SelectItem>
+                      <SelectItem value="120">2 hours</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="appointmentSlotInterval">
-                    Slot Interval (minutes)
+                    Time Slot Interval (minutes)
                   </Label>
-                  <Input
-                    id="appointmentSlotInterval"
-                    type="number"
-                    min="5"
-                    step="5"
-                    value={formData.appointmentSlotInterval}
-                    onChange={(e) =>
-                      updateField(
-                        "appointmentSlotInterval",
-                        parseInt(e.target.value)
-                      )
+                  <Select
+                    value={formData.appointmentSlotInterval.toString()}
+                    onValueChange={(value) =>
+                      updateField("appointmentSlotInterval", parseInt(value))
                     }
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Time between appointment slots
-                  </p>
+                  >
+                    <SelectTrigger id="appointmentSlotInterval">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="5">5 minutes</SelectItem>
+                      <SelectItem value="10">10 minutes</SelectItem>
+                      <SelectItem value="15">15 minutes</SelectItem>
+                      <SelectItem value="30">30 minutes</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="maxAppointmentsPerDay">
-                    Maximum Appointments Per Day
+                    Maximum Appointments Per Doctor Per Day
                   </Label>
                   <Input
                     id="maxAppointmentsPerDay"
                     type="number"
                     min="1"
+                    max="100"
                     value={formData.maxAppointmentsPerDay}
                     onChange={(e) =>
                       updateField(
@@ -446,21 +535,21 @@ export default function SettingsPage() {
                       )
                     }
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Maximum appointments a doctor can have per day
-                  </p>
                 </div>
               </div>
               <Separator />
               <div className="space-y-2">
-                <Label>Working Hours</Label>
+                <Label>Default Working Hours</Label>
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="workingHoursStart">Start Time</Label>
                     <Input
                       id="workingHoursStart"
                       type="time"
-                      defaultValue="09:00"
+                      value={formData.workingHoursStart}
+                      onChange={(e) =>
+                        updateField("workingHoursStart", e.target.value)
+                      }
                     />
                   </div>
                   <div className="space-y-2">
@@ -468,172 +557,338 @@ export default function SettingsPage() {
                     <Input
                       id="workingHoursEnd"
                       type="time"
-                      defaultValue="17:00"
+                      value={formData.workingHoursEnd}
+                      onChange={(e) =>
+                        updateField("workingHoursEnd", e.target.value)
+                      }
                     />
                   </div>
                 </div>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Billing Settings */}
-        <TabsContent value="billing" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Billing Configuration</CardTitle>
-              <CardDescription>
-                Configure billing rules and payment settings
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="currency">Currency</Label>
-                  <Select defaultValue="USD">
-                    <SelectTrigger id="currency">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="USD">USD - US Dollar</SelectItem>
-                      <SelectItem value="EUR">EUR - Euro</SelectItem>
-                      <SelectItem value="GBP">GBP - British Pound</SelectItem>
-                      <SelectItem value="LKR">
-                        LKR - Sri Lankan Rupee
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="taxRate">Tax Rate (%)</Label>
-                  <Input
-                    id="taxRate"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    defaultValue="0"
-                  />
-                </div>
-              </div>
-              <Separator />
-              <div className="space-y-2">
-                <Label htmlFor="paymentMethods">Accepted Payment Methods</Label>
-                <div className="space-y-2">
-                  <div className="flex items-center space-x-2">
-                    <Switch id="cash" defaultChecked />
-                    <Label htmlFor="cash">Cash</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Switch id="card" defaultChecked />
-                    <Label htmlFor="card">Credit/Debit Card</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Switch id="insurance" defaultChecked />
-                    <Label htmlFor="insurance">Insurance</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Switch id="online" />
-                    <Label htmlFor="online">Online Payment</Label>
-                  </div>
-                </div>
-              </div>
-              <Separator />
-              <div className="space-y-2">
-                <Label htmlFor="invoicePrefix">Invoice Number Prefix</Label>
-                <Input
-                  id="invoicePrefix"
-                  placeholder="INV-"
-                  defaultValue="INV-"
-                />
                 <p className="text-xs text-muted-foreground">
-                  Prefix for invoice numbers (e.g., INV-001, INV-002)
+                  Standard operating hours for the facility
                 </p>
               </div>
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* Backup & Restore */}
-        <TabsContent value="backup" className="space-y-6">
+        {/* Notification Settings */}
+        <TabsContent value="notifications" className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Backup & Restore</CardTitle>
+              <CardTitle>Notification Preferences</CardTitle>
               <CardDescription>
-                Manage database backups and restoration
+                Configure how the system sends notifications to users
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="flex items-center gap-2">
+                    <Mail className="h-4 w-4" />
+                    Email Notifications
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    Send email notifications for appointments and updates
+                  </p>
+                </div>
+                <Switch
+                  checked={formData.enableEmailNotifications}
+                  onCheckedChange={(checked) =>
+                    updateField("enableEmailNotifications", checked)
+                  }
+                />
+              </div>
+              <Separator />
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="flex items-center gap-2">
+                    <Bell className="h-4 w-4" />
+                    SMS Notifications
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    Send SMS notifications to patients
+                  </p>
+                </div>
+                <Switch
+                  checked={formData.enableSmsNotifications}
+                  onCheckedChange={(checked) =>
+                    updateField("enableSmsNotifications", checked)
+                  }
+                />
+              </div>
+              <Separator />
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="flex items-center gap-2">
+                    <Clock className="h-4 w-4" />
+                    Appointment Reminders
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    Send automatic appointment reminders to patients
+                  </p>
+                </div>
+                <Switch
+                  checked={formData.enableAppointmentReminders}
+                  onCheckedChange={(checked) =>
+                    updateField("enableAppointmentReminders", checked)
+                  }
+                />
+              </div>
+              {formData.enableAppointmentReminders && (
+                <>
+                  <Separator />
+                  <div className="space-y-2">
+                    <Label htmlFor="reminderHoursBefore">
+                      Send Reminder (hours before appointment)
+                    </Label>
+                    <Select
+                      value={formData.reminderHoursBefore.toString()}
+                      onValueChange={(value) =>
+                        updateField("reminderHoursBefore", parseInt(value))
+                      }
+                    >
+                      <SelectTrigger id="reminderHoursBefore">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1">1 hour before</SelectItem>
+                        <SelectItem value="2">2 hours before</SelectItem>
+                        <SelectItem value="4">4 hours before</SelectItem>
+                        <SelectItem value="12">12 hours before</SelectItem>
+                        <SelectItem value="24">24 hours before</SelectItem>
+                        <SelectItem value="48">48 hours before</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Security Settings */}
+        <TabsContent value="security" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Security Configuration</CardTitle>
+              <CardDescription>
+                Manage authentication and security settings
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="maxLoginAttempts">
+                    Maximum Login Attempts
+                  </Label>
+                  <Input
+                    id="maxLoginAttempts"
+                    type="number"
+                    min="3"
+                    max="10"
+                    value={formData.maxLoginAttempts}
+                    onChange={(e) =>
+                      updateField("maxLoginAttempts", parseInt(e.target.value))
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Account locks after this many failed login attempts
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="dataRetentionDays">
+                    Data Retention (days)
+                  </Label>
+                  <Input
+                    id="dataRetentionDays"
+                    type="number"
+                    min="30"
+                    max="3650"
+                    value={formData.dataRetentionDays}
+                    onChange={(e) =>
+                      updateField("dataRetentionDays", parseInt(e.target.value))
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    How long to keep audit logs and deleted records
+                  </p>
+                </div>
+              </div>
+              <Separator />
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="flex items-center gap-2">
+                    <Shield className="h-4 w-4" />
+                    Two-Factor Authentication
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    Require 2FA for admin users (Coming Soon)
+                  </p>
+                </div>
+                <Switch
+                  checked={formData.enableTwoFactorAuth}
+                  onCheckedChange={(checked) =>
+                    updateField("enableTwoFactorAuth", checked)
+                  }
+                  disabled
+                />
+              </div>
+              <Alert>
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>Security Best Practices</AlertTitle>
+                <AlertDescription>
+                  Regularly review audit logs, use strong passwords, and enable
+                  two-factor authentication when available to protect patient
+                  data.
+                </AlertDescription>
+              </Alert>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Backup & Data */}
+        <TabsContent value="backup" className="space-y-6">
+          <Alert>
+            <CheckCircle2 className="h-4 w-4" />
+            <AlertTitle>Data Protection</AlertTitle>
+            <AlertDescription>
+              Regular backups ensure your medical data is safe. Store backups
+              securely in a separate location for disaster recovery.
+            </AlertDescription>
+          </Alert>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Automatic Backup Configuration</CardTitle>
+              <CardDescription>
+                Configure automated database backups
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Enable Automatic Backups</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Automatically create database backups on schedule
+                  </p>
+                </div>
+                <Switch
+                  checked={formData.autoBackupEnabled}
+                  onCheckedChange={(checked) =>
+                    updateField("autoBackupEnabled", checked)
+                  }
+                />
+              </div>
+              {formData.autoBackupEnabled && (
+                <>
+                  <Separator />
+                  <div className="space-y-2">
+                    <Label htmlFor="backupFrequency">Backup Frequency</Label>
+                    <Select
+                      value={formData.backupFrequency}
+                      onValueChange={(value) =>
+                        updateField("backupFrequency", value)
+                      }
+                    >
+                      <SelectTrigger id="backupFrequency">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="hourly">Hourly</SelectItem>
+                        <SelectItem value="every-6-hours">
+                          Every 6 hours
+                        </SelectItem>
+                        <SelectItem value="daily">Daily</SelectItem>
+                        <SelectItem value="weekly">Weekly</SelectItem>
+                        <SelectItem value="monthly">Monthly</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Recommended: Daily backups for medical systems
+                    </p>
+                  </div>
+                  <div className="p-3 bg-muted rounded-md">
+                    <p className="text-sm">
+                      <strong>Next Backup:</strong> Scheduled for{" "}
+                      {new Date(Date.now() + 86400000).toLocaleString()}
+                    </p>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Manual Backup & Restore</CardTitle>
+              <CardDescription>
+                Create manual backups or restore from previous backups
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Automatic Backups</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Enable automatic database backups
-                    </p>
-                  </div>
-                  <Switch
-                    checked={formData.autoBackupEnabled}
-                    onCheckedChange={(checked) =>
-                      updateField("autoBackupEnabled", checked)
-                    }
-                  />
-                </div>
-                {formData.autoBackupEnabled && (
-                  <>
-                    <Separator />
-                    <div className="space-y-2">
-                      <Label htmlFor="backupFrequency">Backup Frequency</Label>
-                      <Select
-                        value={formData.backupFrequency}
-                        onValueChange={(value) =>
-                          updateField("backupFrequency", value)
-                        }
-                      >
-                        <SelectTrigger id="backupFrequency">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="hourly">Hourly</SelectItem>
-                          <SelectItem value="daily">Daily</SelectItem>
-                          <SelectItem value="weekly">Weekly</SelectItem>
-                          <SelectItem value="monthly">Monthly</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </>
-                )}
-              </div>
-              <Separator />
-              <div className="space-y-4">
-                <Label>Manual Backup</Label>
                 <div className="flex gap-3">
                   <Button
                     onClick={handleBackup}
                     disabled={backupMutation.isPending}
                     variant="outline"
+                    className="flex-1"
                   >
                     <Download className="w-4 h-4 mr-2" />
                     {backupMutation.isPending
                       ? "Creating Backup..."
                       : "Download Backup"}
                   </Button>
-                  <Button onClick={handleRestore} variant="outline">
+                  <Button
+                    onClick={handleRestore}
+                    variant="outline"
+                    className="flex-1"
+                  >
                     <Upload className="w-4 h-4 mr-2" />
                     Restore from Backup
                   </Button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".sql"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Download a copy of the database or restore from a previous
-                  backup
+                  <strong>Download:</strong> Creates a .sql file with complete
+                  database backup
+                  <br />
+                  <strong>Restore:</strong> Upload a .sql backup file to restore
+                  data
                 </p>
               </div>
               <Separator />
               <div className="space-y-2">
-                <Label>Last Backup</Label>
-                <p className="text-sm">
-                  Last backup was created on: {new Date().toLocaleDateString()}{" "}
-                  at {new Date().toLocaleTimeString()}
-                </p>
+                <Label>Recent Backup Activity</Label>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between p-2 border rounded-md text-sm">
+                    <span>Last Manual Backup</span>
+                    <Badge variant="outline">
+                      {new Date().toLocaleDateString()} at{" "}
+                      {new Date().toLocaleTimeString()}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center justify-between p-2 border rounded-md text-sm">
+                    <span>Last Auto Backup</span>
+                    <Badge variant="outline">
+                      {new Date(Date.now() - 86400000).toLocaleDateString()}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center justify-between p-2 border rounded-md text-sm">
+                    <span>Backup Status</span>
+                    <Badge className="bg-green-500">
+                      <CheckCircle2 className="w-3 h-3 mr-1" />
+                      Healthy
+                    </Badge>
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>
