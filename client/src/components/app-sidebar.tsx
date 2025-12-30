@@ -81,7 +81,6 @@ export function AppSidebar() {
         { title: "Medical Records", url: "/medical-records", icon: FileText },
         { title: "Prescriptions", url: "/prescriptions", icon: Pill },
         { title: "Lab Results", url: "/lab-results", icon: FlaskConical },
-        { title: "Bills & Payments", url: "/bills", icon: Receipt },
       ],
       doctor: [
         { title: "My Availability", url: "/doctor/availability", icon: MapPin },
@@ -101,6 +100,11 @@ export function AppSidebar() {
         { title: "QR Scanner", url: "/scanner", icon: Activity },
       ],
       lab_technician: [
+        {
+          title: "Pending Tests",
+          url: "/lab-technician-tests",
+          icon: FlaskConical,
+        },
         { title: "Lab Tests", url: "/lab-tests", icon: FlaskConical },
         { title: "Test Results", url: "/test-results", icon: FileText },
       ],

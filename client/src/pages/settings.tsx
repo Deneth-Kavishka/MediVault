@@ -137,7 +137,6 @@ export default function SettingsPage() {
     dataRetentionDays: 365,
     passwordExpiryDays: 90,
     facebookUrl: "",
-    facebookUrl: "",
     twitterUrl: "",
     linkedinUrl: "",
     instagramUrl: "",

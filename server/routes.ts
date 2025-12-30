@@ -3,6 +3,7 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
+import { format } from "date-fns";
 // Use local authentication
 import {
   setupAuth,
@@ -40,9 +41,13 @@ import {
   prescriptionItems,
   systemSettings,
   insertSystemSettingsSchema,
+  medicalRecords,
+  doctors,
+  users,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
@@ -1944,7 +1949,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (user?.role === "patient") {
         const patient = await storage.getPatientByUserId(userId);
         if (patient) {
-          records = await storage.getMedicalRecordsByPatient(patient.id);
+          // Get medical records with doctor information including specialty
+          const rawRecords = await db
+            .select({
+              id: medicalRecords.id,
+              patientId: medicalRecords.patientId,
+              doctorId: medicalRecords.doctorId,
+              appointmentId: medicalRecords.appointmentId,
+              diagnosis: medicalRecords.diagnosis,
+              symptoms: medicalRecords.symptoms,
+              notes: medicalRecords.notes,
+              vitalSigns: medicalRecords.vitalSigns,
+              createdAt: medicalRecords.createdAt,
+              updatedAt: medicalRecords.updatedAt,
+              doctorFirstName: users.firstName,
+              doctorLastName: users.lastName,
+              doctorSpecialty: doctors.specialization,
+            })
+            .from(medicalRecords)
+            .leftJoin(doctors, eq(doctors.id, medicalRecords.doctorId))
+            .leftJoin(users, eq(users.id, doctors.userId))
+            .where(eq(medicalRecords.patientId, patient.id))
+            .orderBy(medicalRecords.createdAt);
+
+          // Map to add computed doctorName
+          records = rawRecords.map((record) => ({
+            ...record,
+            doctorName:
+              record.doctorFirstName && record.doctorLastName
+                ? `${record.doctorFirstName} ${record.doctorLastName}`
+                : null,
+            doctorFirstName: undefined,
+            doctorLastName: undefined,
+          }));
         }
       }
 
@@ -2357,14 +2394,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
   // PRESCRIPTION ROUTES
   // ============================================================================
+  // Helper function to generate custom prescription ID
+  const generatePrescriptionId = async () => {
+    const now = new Date();
+    const day = String(now.getDate()).padStart(2, "0");
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const year = String(now.getFullYear()).slice(-2);
+    const dateStr = `${day}/${month}/${year}`;
+
+    // Get count of prescriptions created today
+    const todayStart = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate()
+    );
+    const todayEnd = new Date(todayStart);
+    todayEnd.setDate(todayEnd.getDate() + 1);
+
+    const todayPrescriptions = await db
+      .select()
+      .from(prescriptions)
+      .where(
+        sql`${prescriptions.createdAt} >= ${todayStart.toISOString()} AND ${
+          prescriptions.createdAt
+        } < ${todayEnd.toISOString()}`
+      );
+
+    const sequence = String(todayPrescriptions.length + 1).padStart(3, "0");
+    return `MV-PRES-${dateStr}-${sequence}`;
+  };
+
   app.post("/api/prescriptions", isDoctorOrAdmin, async (req, res) => {
     try {
       const { items, ...prescriptionData } = req.body;
 
-      // Create prescription with QR code
-      const qrCode = `RX-${Date.now()}`; // Simple QR code generation
+      // Generate custom prescription ID and QR code
+      const customId = await generatePrescriptionId();
+      const qrCode = `RX-${Date.now()}`;
+
       const validatedPrescription = insertPrescriptionSchema.parse({
         ...prescriptionData,
+        id: customId,
         qrCode,
         status: "active",
       });
@@ -2398,39 +2468,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.id;
       const user = await storage.getUser(userId);
 
-      let prescriptions: any[] = [];
+      let result: any[] = [];
       if (user?.role === "patient") {
         const patient = await storage.getPatientByUserId(userId);
         if (patient) {
-          // Get prescriptions with doctor information
-          const patientPrescriptions = await db
+          // Get prescriptions with doctor information including specialty
+          const rawPrescriptions = await db
             .select({
-              id: sql`${prescriptions}.id`,
-              patientId: sql`${prescriptions}.patient_id`,
-              doctorId: sql`${prescriptions}.doctor_id`,
-              status: sql`${prescriptions}.status`,
-              issuedDate: sql`${prescriptions}.issued_date`,
-              validUntil: sql`${prescriptions}.valid_until`,
-              notes: sql`${prescriptions}.notes`,
-              qrCode: sql`${prescriptions}.qr_code`,
-              scannedCount: sql`${prescriptions}.scanned_count`,
-              lastScannedAt: sql`${prescriptions}.last_scanned_at`,
-              dispensedAt: sql`${prescriptions}.dispensed_at`,
-              doctorName: sql`CONCAT(${sql.identifier(
-                "users"
-              )}.first_name, ' ', ${sql.identifier("users")}.last_name)`,
+              id: prescriptions.id,
+              patientId: prescriptions.patientId,
+              doctorId: prescriptions.doctorId,
+              status: prescriptions.status,
+              issuedDate: prescriptions.dateIssued,
+              validUntil: prescriptions.expiryDate,
+              notes: prescriptions.notes,
+              qrCode: prescriptions.qrCode,
+              scannedCount: prescriptions.scannedCount,
+              lastScannedAt: prescriptions.lastScannedAt,
+              dispensedAt: prescriptions.dispensedAt,
+              dispensedBy: prescriptions.dispensedBy,
+              doctorFirstName: users.firstName,
+              doctorLastName: users.lastName,
+              doctorSpecialty: doctors.specialization,
             })
             .from(prescriptions)
-            .leftJoin(
-              sql`doctors`,
-              sql`doctors.id = ${prescriptions}.doctor_id`
-            )
-            .leftJoin(sql`users`, sql`users.id = doctors.user_id`)
+            .leftJoin(doctors, eq(doctors.id, prescriptions.doctorId))
+            .leftJoin(users, eq(users.id, doctors.userId))
             .where(eq(prescriptions.patientId, patient.id))
-            .orderBy(sql`${prescriptions}.issued_date DESC`);
+            .orderBy(prescriptions.dateIssued);
+
+          // Map to add computed doctorName
+          const patientPrescriptions = rawPrescriptions.map((record) => ({
+            ...record,
+            doctorName:
+              record.doctorFirstName && record.doctorLastName
+                ? `${record.doctorFirstName} ${record.doctorLastName}`
+                : null,
+            doctorFirstName: undefined,
+            doctorLastName: undefined,
+          }));
 
           // Get items for each prescription
-          prescriptions = await Promise.all(
+          result = await Promise.all(
             patientPrescriptions.map(async (prescription) => {
               const items = await db
                 .select()
@@ -2442,7 +2521,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      res.json(prescriptions);
+      res.json(result);
     } catch (error) {
       console.error("Error fetching prescriptions:", error);
       res.status(500).json({ message: "Failed to fetch prescriptions" });
@@ -2754,6 +2833,287 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Patient selects lab facility for their test
+  app.patch(
+    "/api/lab-tests/:id/select-lab",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+
+        if (!user || user.role !== "patient") {
+          return res
+            .status(403)
+            .json({ message: "Only patients can select labs" });
+        }
+
+        const { labFacilityId } = req.body;
+        if (!labFacilityId) {
+          return res
+            .status(400)
+            .json({ message: "Lab facility ID is required" });
+        }
+
+        // Get patient record
+        const patient = await storage.getPatientByUserId(userId);
+        if (!patient) {
+          return res.status(404).json({ message: "Patient profile not found" });
+        }
+
+        // Verify the test belongs to this patient and is pending
+        const test = await db
+          .select()
+          .from(labTestsTable)
+          .where(eq(labTestsTable.id, req.params.id))
+          .limit(1);
+
+        if (test.length === 0) {
+          return res.status(404).json({ message: "Lab test not found" });
+        }
+
+        if (test[0].patientId !== patient.id) {
+          return res
+            .status(403)
+            .json({ message: "This test does not belong to you" });
+        }
+
+        if (test[0].status !== "pending") {
+          return res
+            .status(400)
+            .json({ message: "Can only select lab for pending tests" });
+        }
+
+        // Update the lab facility
+        const updated = await db
+          .update(labTestsTable)
+          .set({
+            labFacilityId: labFacilityId,
+            updatedAt: new Date(),
+          })
+          .where(eq(labTestsTable.id, req.params.id))
+          .returning();
+
+        // Notify lab facility (if they have a technician)
+        const facility = await db
+          .select()
+          .from(sql.identifier("lab_facilities"))
+          .where(sql`${sql.identifier("lab_facilities")}.id = ${labFacilityId}`)
+          .limit(1);
+
+        if (facility.length > 0 && facility[0].lab_technician_id) {
+          const labTech = await db
+            .select()
+            .from(sql.identifier("lab_technicians"))
+            .where(
+              sql`${sql.identifier("lab_technicians")}.id = ${
+                facility[0].lab_technician_id
+              }`
+            )
+            .limit(1);
+
+          if (labTech.length > 0) {
+            await storage.createNotification({
+              recipientId: labTech[0].user_id,
+              type: "lab_result",
+              title: "New Lab Test Request",
+              message: `A patient has selected your facility for ${test[0].testName}`,
+              relatedEntityId: test[0].id,
+            });
+          }
+        }
+
+        res.json(updated[0]);
+      } catch (error) {
+        console.error("Error selecting lab facility:", error);
+        res.status(500).json({ message: "Failed to select lab facility" });
+      }
+    }
+  );
+
+  // Lab technician approves test with appointment date/time
+  app.patch(
+    "/api/lab-tests/:id/approve",
+    isLabTechOrAdmin,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+
+        if (!user) {
+          return res.status(401).json({ message: "User not found" });
+        }
+
+        const { approvedDate, sampleCollectionDate, technicianNotes } =
+          req.body;
+
+        if (!approvedDate) {
+          return res
+            .status(400)
+            .json({ message: "Approved date/time is required" });
+        }
+
+        // Get lab technician record
+        let labTechId = null;
+        if (user.role === "lab_technician") {
+          const labTech = await db
+            .select()
+            .from(sql.identifier("lab_technicians"))
+            .where(
+              sql`${sql.identifier("lab_technicians")}.user_id = ${userId}`
+            )
+            .limit(1);
+
+          if (labTech.length > 0) {
+            labTechId = labTech[0].id;
+          }
+        }
+
+        // Verify the test is pending or belongs to this lab's facility
+        const test = await db
+          .select()
+          .from(labTestsTable)
+          .where(eq(labTestsTable.id, req.params.id))
+          .limit(1);
+
+        if (test.length === 0) {
+          return res.status(404).json({ message: "Lab test not found" });
+        }
+
+        if (test[0].status !== "pending") {
+          return res
+            .status(400)
+            .json({ message: "Can only approve pending tests" });
+        }
+
+        // Update the test with approval details
+        const updated = await db
+          .update(labTestsTable)
+          .set({
+            status: "approved",
+            labTechnicianId: labTechId,
+            approvedDate: new Date(approvedDate),
+            sampleCollectionDate: sampleCollectionDate
+              ? new Date(sampleCollectionDate)
+              : null,
+            technicianNotes: technicianNotes || null,
+            updatedAt: new Date(),
+          })
+          .where(eq(labTestsTable.id, req.params.id))
+          .returning();
+
+        // Notify patient about approval
+        await storage.createNotification({
+          recipientId: test[0].patientId,
+          type: "lab_result",
+          title: "Lab Test Approved",
+          message: `Your ${test[0].testName} has been approved. ${
+            sampleCollectionDate
+              ? `Sample collection scheduled for ${format(
+                  new Date(sampleCollectionDate),
+                  "MMM dd, yyyy 'at' HH:mm"
+                )}`
+              : "Please contact the lab for sample collection."
+          }`,
+          relatedEntityId: test[0].id,
+        });
+
+        res.json(updated[0]);
+      } catch (error) {
+        console.error("Error approving lab test:", error);
+        res.status(500).json({ message: "Failed to approve lab test" });
+      }
+    }
+  );
+
+  // Get pending tests for lab technician
+  app.get(
+    "/api/lab-tests/technician/pending",
+    isLabTechOrAdmin,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+
+        if (!user) {
+          return res.status(401).json({ message: "User not found" });
+        }
+
+        // Get lab technician record
+        const labTech = await db
+          .select()
+          .from(sql.identifier("lab_technicians"))
+          .where(sql`${sql.identifier("lab_technicians")}.user_id = ${userId}`)
+          .limit(1);
+
+        if (labTech.length === 0) {
+          return res
+            .status(404)
+            .json({ message: "Lab technician profile not found" });
+        }
+
+        // Get lab facility managed by this technician
+        const facility = await db
+          .select()
+          .from(sql.identifier("lab_facilities"))
+          .where(
+            sql`${sql.identifier("lab_facilities")}.lab_technician_id = ${
+              labTech[0].id
+            }`
+          )
+          .limit(1);
+
+        let labTests: any[] = [];
+
+        if (facility.length > 0) {
+          // Create table aliases
+          const patientUsers = alias(users, "patient_users");
+          const doctorUsers = alias(users, "doctor_users");
+
+          // Get tests assigned to this facility
+          labTests = await db
+            .select({
+              id: labTestsTable.id,
+              patientId: labTestsTable.patientId,
+              testType: labTestsTable.testType,
+              testName: labTestsTable.testName,
+              status: labTestsTable.status,
+              urgency: sql`COALESCE(${labTestsTable.urgency}, 'normal')`,
+              requestDate: labTestsTable.requestDate,
+              approvedDate: labTestsTable.approvedDate,
+              sampleCollectionDate: labTestsTable.sampleCollectionDate,
+              notes: labTestsTable.notes,
+              technicianNotes: labTestsTable.technicianNotes,
+              patientName: sql<string>`CONCAT(${patientUsers.firstName}, ' ', ${patientUsers.lastName})`,
+              patientHealthId: patients.healthId,
+              doctorName: sql<string>`CONCAT(${doctorUsers.firstName}, ' ', ${doctorUsers.lastName})`,
+              labFacilityName: sql<string>`${sql.identifier(
+                "lab_facilities"
+              )}.name`,
+            })
+            .from(labTestsTable)
+            .leftJoin(patients, eq(patients.id, labTestsTable.patientId))
+            .leftJoin(patientUsers, eq(patientUsers.id, patients.userId))
+            .leftJoin(doctors, eq(doctors.id, labTestsTable.doctorId))
+            .leftJoin(doctorUsers, eq(doctorUsers.id, doctors.userId))
+            .leftJoin(
+              sql.identifier("lab_facilities"),
+              sql`${sql.identifier("lab_facilities")}.id = ${
+                labTestsTable.labFacilityId
+              }`
+            )
+            .where(eq(labTestsTable.labFacilityId, facility[0].id))
+            .orderBy(sql`${labTestsTable.requestDate} DESC`);
+        }
+
+        res.json(labTests);
+      } catch (error) {
+        console.error("Error fetching lab technician tests:", error);
+        res.status(500).json({ message: "Failed to fetch lab tests" });
+      }
+    }
+  );
+
   // Get all lab tests requested by the current doctor
   app.get("/api/lab-tests/doctor/mine", isDoctor, async (req: any, res) => {
     try {
@@ -2802,6 +3162,185 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching doctor lab tests:", error);
       res.status(500).json({ message: "Failed to fetch lab tests" });
+    }
+  });
+
+  // Enhanced patient lab tests endpoint with all details
+  app.get("/api/lab-tests/patient", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const user = await storage.getUser(userId);
+
+      if (!user || user.role !== "patient") {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const patient = await storage.getPatientByUserId(userId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient profile not found" });
+      }
+
+      // Create table aliases
+      const doctorUsers = alias(users, "doctor_users");
+      const techUsers = alias(users, "tech_users");
+
+      // Get lab tests with all related information
+      const labTests = await db
+        .select({
+          id: labTestsTable.id,
+          patientId: labTestsTable.patientId,
+          doctorId: labTestsTable.doctorId,
+          labFacilityId: labTestsTable.labFacilityId,
+          labTechnicianId: labTestsTable.labTechnicianId,
+          testType: labTestsTable.testType,
+          testName: labTestsTable.testName,
+          status: labTestsTable.status,
+          urgency: sql`COALESCE(${labTestsTable.urgency}, 'normal')`,
+          requestDate: labTestsTable.requestDate,
+          approvedDate: labTestsTable.approvedDate,
+          sampleCollectionDate: labTestsTable.sampleCollectionDate,
+          testStartDate: labTestsTable.testStartDate,
+          completionDate: labTestsTable.completionDate,
+          results: labTestsTable.results,
+          resultFileUrl: labTestsTable.resultFileUrl,
+          isAbnormal: labTestsTable.isAbnormal,
+          notes: labTestsTable.notes,
+          technicianNotes: labTestsTable.technicianNotes,
+          doctorName: sql<string>`CONCAT(${doctorUsers.firstName}, ' ', ${doctorUsers.lastName})`,
+          doctorSpecialization: doctors.specialization,
+          labFacilityName: sql<string>`${sql.identifier(
+            "lab_facilities"
+          )}.name`,
+          labFacilityAddress: sql<string>`${sql.identifier(
+            "lab_facilities"
+          )}.address`,
+          labFacilityCity: sql<string>`${sql.identifier(
+            "lab_facilities"
+          )}.city`,
+          labTechnicianName: sql<string>`CONCAT(${techUsers.firstName}, ' ', ${techUsers.lastName})`,
+        })
+        .from(labTestsTable)
+        .leftJoin(doctors, eq(doctors.id, labTestsTable.doctorId))
+        .leftJoin(doctorUsers, eq(doctorUsers.id, doctors.userId))
+        .leftJoin(
+          sql.identifier("lab_facilities"),
+          sql`${sql.identifier("lab_facilities")}.id = ${
+            labTestsTable.labFacilityId
+          }`
+        )
+        .leftJoin(
+          sql.identifier("lab_technicians"),
+          sql`${sql.identifier("lab_technicians")}.id = ${
+            labTestsTable.labTechnicianId
+          }`
+        )
+        .leftJoin(
+          techUsers,
+          sql`${techUsers.id} = ${sql.identifier("lab_technicians")}.user_id`
+        )
+        .where(eq(labTestsTable.patientId, patient.id))
+        .orderBy(sql`${labTestsTable.requestDate} DESC`);
+
+      res.json(labTests);
+    } catch (error) {
+      console.error("Error fetching patient lab tests:", error);
+      res.status(500).json({ message: "Failed to fetch lab tests" });
+    }
+  });
+
+  // ============================================================================
+  // LAB FACILITIES ROUTES
+  // ============================================================================
+
+  // Get all active lab facilities
+  app.get("/api/lab-facilities", isAuthenticated, async (req, res) => {
+    try {
+      const facilities = await db
+        .select()
+        .from(sql.identifier("lab_facilities"))
+        .where(sql`${sql.identifier("lab_facilities")}.is_active = true`)
+        .orderBy(
+          sql`${sql.identifier("lab_facilities")}.city, ${sql.identifier(
+            "lab_facilities"
+          )}.name`
+        );
+
+      res.json(facilities);
+    } catch (error) {
+      console.error("Error fetching lab facilities:", error);
+      res.status(500).json({ message: "Failed to fetch lab facilities" });
+    }
+  });
+
+  // Create a new lab facility (admin or lab technician)
+  app.post("/api/lab-facilities", isAuthenticated, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const user = await storage.getUser(userId);
+
+      if (!user || (user.role !== "admin" && user.role !== "lab_technician")) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // If lab technician, set their ID
+      let labTechnicianId = req.body.labTechnicianId;
+      if (user.role === "lab_technician") {
+        const labTech = await db
+          .select()
+          .from(sql.identifier("lab_technicians"))
+          .where(sql`${sql.identifier("lab_technicians")}.user_id = ${userId}`)
+          .limit(1);
+
+        if (labTech.length > 0) {
+          labTechnicianId = labTech[0].id;
+        }
+      }
+
+      const facility = await db
+        .insert(sql.identifier("lab_facilities"))
+        .values({
+          ...req.body,
+          lab_technician_id: labTechnicianId,
+          is_verified: user.role === "admin", // Auto-verify if created by admin
+        })
+        .returning();
+
+      res.status(201).json(facility[0]);
+    } catch (error: any) {
+      console.error("Error creating lab facility:", error);
+      res
+        .status(400)
+        .json({ message: error.message || "Failed to create lab facility" });
+    }
+  });
+
+  // Update lab facility
+  app.patch("/api/lab-facilities/:id", isAuthenticated, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const user = await storage.getUser(userId);
+
+      if (!user || (user.role !== "admin" && user.role !== "lab_technician")) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const facility = await db
+        .update(sql.identifier("lab_facilities"))
+        .set({
+          ...req.body,
+          updated_at: new Date(),
+        })
+        .where(sql`${sql.identifier("lab_facilities")}.id = ${req.params.id}`)
+        .returning();
+
+      if (facility.length === 0) {
+        return res.status(404).json({ message: "Lab facility not found" });
+      }
+
+      res.json(facility[0]);
+    } catch (error) {
+      console.error("Error updating lab facility:", error);
+      res.status(500).json({ message: "Failed to update lab facility" });
     }
   });
 

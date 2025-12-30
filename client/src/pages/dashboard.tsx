@@ -99,39 +99,101 @@ export default function Dashboard() {
 }
 
 function PatientDashboard() {
+  const [, navigate] = useLocation();
+
+  // Fetch real data
+  const { data: appointments = [], isLoading: appointmentsLoading } = useQuery({
+    queryKey: ["/api/appointments"],
+  });
+
+  const { data: prescriptions = [], isLoading: prescriptionsLoading } =
+    useQuery({
+      queryKey: ["/api/prescriptions"],
+    });
+
+  const { data: labTests = [], isLoading: labTestsLoading } = useQuery({
+    queryKey: ["/api/lab-tests/patient"],
+  });
+
+  const { data: medicalRecords = [], isLoading: recordsLoading } = useQuery({
+    queryKey: ["/api/medical-records"],
+  });
+
+  const { data: notifications = [], isLoading: notificationsLoading } =
+    useQuery({
+      queryKey: ["/api/notifications"],
+    });
+
+  // Calculate statistics
+  const upcomingAppointments = appointments.filter(
+    (apt: any) =>
+      apt.status === "scheduled" && new Date(apt.appointmentDate) >= new Date()
+  );
+
+  const activePrescriptions = prescriptions.filter(
+    (rx: any) => rx.status === "active" || rx.status === "pending"
+  );
+
+  const pendingLabTests = labTests.filter(
+    (test: any) => test.status === "pending" || test.status === "approved"
+  );
+
+  const unreadNotifications = notifications.filter(
+    (notif: any) => !notif.isRead
+  );
+
   const statsCards = [
     {
       title: "Upcoming Appointments",
-      value: "3",
+      value: upcomingAppointments.length.toString(),
       icon: Calendar,
-      color: "text-chart-1",
+      color: "text-blue-600",
+      bgColor: "bg-blue-50",
+      clickAction: () => navigate("/appointments"),
     },
     {
       title: "Active Prescriptions",
-      value: "2",
+      value: activePrescriptions.length.toString(),
       icon: Pill,
-      color: "text-chart-2",
+      color: "text-green-600",
+      bgColor: "bg-green-50",
+      clickAction: () => navigate("/prescriptions"),
     },
     {
-      title: "Pending Lab Results",
-      value: "1",
+      title: "Pending Lab Tests",
+      value: pendingLabTests.length.toString(),
       icon: FlaskConical,
-      color: "text-chart-3",
+      color: "text-purple-600",
+      bgColor: "bg-purple-50",
+      clickAction: () => navigate("/lab-results"),
     },
     {
-      title: "Outstanding Bills",
-      value: "$250",
-      icon: Receipt,
-      color: "text-chart-4",
+      title: "Unread Notifications",
+      value: unreadNotifications.length.toString(),
+      icon: Bell,
+      color: "text-orange-600",
+      bgColor: "bg-orange-50",
+      clickAction: () => navigate("/notifications"),
     },
   ];
+
+  const isLoading =
+    appointmentsLoading || prescriptionsLoading || labTestsLoading;
+
+  if (isLoading) {
+    return <DashboardSkeleton />;
+  }
 
   return (
     <div className="space-y-6">
       {/* Stats Grid */}
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
         {statsCards.map((stat) => (
-          <Card key={stat.title}>
+          <Card
+            key={stat.title}
+            className="cursor-pointer hover:shadow-lg transition-shadow"
+            onClick={stat.clickAction}
+          >
             <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 {stat.title}
@@ -142,68 +204,295 @@ function PatientDashboard() {
               <div className="text-3xl font-bold text-foreground">
                 {stat.value}
               </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Click to view details
+              </p>
             </CardContent>
           </Card>
         ))}
       </div>
 
+      {/* Health Summary */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <FileText className="h-5 w-5" />
+            Health Summary
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="p-4 rounded-lg bg-accent/50">
+              <p className="text-sm text-muted-foreground mb-1">
+                Total Appointments
+              </p>
+              <p className="text-2xl font-bold">{appointments.length}</p>
+            </div>
+            <div className="p-4 rounded-lg bg-accent/50">
+              <p className="text-sm text-muted-foreground mb-1">
+                Medical Records
+              </p>
+              <p className="text-2xl font-bold">{medicalRecords.length}</p>
+            </div>
+            <div className="p-4 rounded-lg bg-accent/50">
+              <p className="text-sm text-muted-foreground mb-1">Lab Tests</p>
+              <p className="text-2xl font-bold">{labTests.length}</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Quick Actions */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Quick Actions</CardTitle>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Activity className="h-5 w-5" />
+            Quick Actions
+          </CardTitle>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-3">
-          <Button data-testid="button-book-appointment">
+          <Button
+            onClick={() => navigate("/find-doctors")}
+            className="bg-green-600 hover:bg-green-700 shadow-md hover:shadow-lg hover:scale-105 transition-all duration-200"
+          >
+            <Users className="w-4 h-4 mr-2" />
+            Find Doctors
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => navigate("/appointments")}
+            className="shadow-md hover:shadow-lg hover:scale-105 transition-all duration-200"
+          >
             <Calendar className="w-4 h-4 mr-2" />
-            Book Appointment
+            My Appointments
           </Button>
-          <Button variant="outline" data-testid="button-view-prescriptions">
+          <Button
+            variant="outline"
+            onClick={() => navigate("/prescriptions")}
+            className="shadow-md hover:shadow-lg hover:scale-105 transition-all duration-200"
+          >
             <Pill className="w-4 h-4 mr-2" />
-            View Prescriptions
+            Prescriptions
           </Button>
-          <Button variant="outline" data-testid="button-medical-history">
+          <Button
+            variant="outline"
+            onClick={() => navigate("/lab-results")}
+            className="shadow-md hover:shadow-lg hover:scale-105 transition-all duration-200"
+          >
+            <FlaskConical className="w-4 h-4 mr-2" />
+            Lab Results
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => navigate("/medical-records")}
+            className="shadow-md hover:shadow-lg hover:scale-105 transition-all duration-200"
+          >
             <FileText className="w-4 h-4 mr-2" />
-            Medical History
+            Medical Records
           </Button>
         </CardContent>
       </Card>
 
-      {/* Upcoming Appointments */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        {/* Upcoming Appointments */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <Calendar className="h-5 w-5" />
+                Upcoming Appointments
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate("/appointments")}
+              >
+                View All
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {upcomingAppointments.length === 0 ? (
+              <div className="text-center py-8">
+                <Calendar className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
+                <p className="text-muted-foreground">
+                  No upcoming appointments
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  onClick={() => navigate("/find-doctors")}
+                >
+                  Book an Appointment
+                </Button>
+              </div>
+            ) : (
+              <ScrollArea className="h-[300px]">
+                <div className="space-y-4">
+                  {upcomingAppointments.slice(0, 5).map((apt: any) => (
+                    <div
+                      key={apt.id}
+                      className="flex items-center justify-between p-4 rounded-lg border border-border hover:bg-accent transition-colors"
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary/10">
+                          <Activity className="w-6 h-6 text-primary" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-foreground">
+                            {apt.doctorName || "Doctor"}
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            {apt.reason || "Consultation"}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-medium text-foreground text-sm">
+                          {new Date(apt.appointmentDate).toLocaleDateString()}
+                        </p>
+                        <Badge
+                          variant={
+                            apt.status === "scheduled" ? "default" : "secondary"
+                          }
+                          className="mt-1"
+                        >
+                          {apt.status}
+                        </Badge>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Recent Lab Tests */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <FlaskConical className="h-5 w-5" />
+                Recent Lab Tests
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate("/lab-results")}
+              >
+                View All
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {labTests.length === 0 ? (
+              <div className="text-center py-8">
+                <FlaskConical className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
+                <p className="text-muted-foreground">No lab tests found</p>
+              </div>
+            ) : (
+              <ScrollArea className="h-[300px]">
+                <div className="space-y-4">
+                  {labTests.slice(0, 5).map((test: any) => (
+                    <div
+                      key={test.id}
+                      className="flex items-center justify-between p-4 rounded-lg border border-border hover:bg-accent transition-colors"
+                    >
+                      <div className="flex-1">
+                        <p className="font-medium text-foreground">
+                          {test.testName}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          {test.testType} • Dr. {test.doctorName}
+                        </p>
+                        {test.urgency === "high" && (
+                          <Badge variant="destructive" className="mt-1">
+                            High Priority
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="text-right">
+                        <Badge
+                          variant={
+                            test.status === "completed"
+                              ? "default"
+                              : test.status === "pending"
+                              ? "secondary"
+                              : "outline"
+                          }
+                        >
+                          {test.status}
+                        </Badge>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {new Date(test.requestDate).toLocaleDateString()}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Active Prescriptions */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Upcoming Appointments</CardTitle>
+          <CardTitle className="text-lg flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <Pill className="h-5 w-5" />
+              Active Prescriptions
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate("/prescriptions")}
+            >
+              View All
+            </Button>
+          </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="space-y-4">
-            {[1, 2, 3].map((i) => (
-              <div
-                key={i}
-                className="flex items-center justify-between p-4 rounded-lg border border-border hover-elevate"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary/10">
-                    <Activity className="w-6 h-6 text-primary" />
+          {activePrescriptions.length === 0 ? (
+            <div className="text-center py-8">
+              <Pill className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
+              <p className="text-muted-foreground">No active prescriptions</p>
+            </div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {activePrescriptions.slice(0, 6).map((rx: any) => (
+                <div
+                  key={rx.id}
+                  className="p-4 rounded-lg border border-border hover:bg-accent transition-colors"
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex-1">
+                      <p className="font-medium text-foreground">
+                        {rx.medicineName || "Prescription"}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Dr. {rx.doctorName}
+                      </p>
+                    </div>
+                    <Badge
+                      variant={rx.status === "active" ? "default" : "secondary"}
+                    >
+                      {rx.status}
+                    </Badge>
                   </div>
-                  <div>
-                    <p className="font-medium text-foreground">
-                      Dr. Sarah Johnson
-                    </p>
-                    <p className="text-sm text-muted-foreground">
-                      Cardiology Consultation
-                    </p>
+                  <div className="text-xs text-muted-foreground mt-2">
+                    Prescribed:{" "}
+                    {new Date(
+                      rx.prescriptionDate || rx.createdAt
+                    ).toLocaleDateString()}
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className="font-medium text-foreground">
-                    Tomorrow, 2:00 PM
-                  </p>
-                  <Badge variant="secondary" className="mt-1">
-                    Confirmed
-                  </Badge>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

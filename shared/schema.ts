@@ -362,6 +362,34 @@ export const prescriptionItems = pgTable("prescription_items", {
 });
 
 // ============================================================================
+// LAB FACILITY TABLE (Labs that patients can choose from)
+// ============================================================================
+
+export const labFacilities = pgTable("lab_facilities", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  labTechnicianId: varchar("lab_technician_id").references(
+    () => labTechnicians.id
+  ), // Optional: if lab tech manages this facility
+  name: varchar("name").notNull(),
+  description: text("description"),
+  address: text("address").notNull(),
+  city: varchar("city").notNull(),
+  latitude: decimal("latitude", { precision: 10, scale: 7 }),
+  longitude: decimal("longitude", { precision: 10, scale: 7 }),
+  placeId: varchar("place_id"), // Google Maps Place ID
+  phone: varchar("phone"),
+  email: varchar("email"),
+  servicesOffered: text("services_offered"), // JSON array of test types offered
+  operatingHours: text("operating_hours"), // JSON object with daily hours
+  isActive: boolean("is_active").default(true),
+  isVerified: boolean("is_verified").default(false), // Admin verification
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ============================================================================
 // LAB TEST TABLE
 // ============================================================================
 
@@ -375,18 +403,28 @@ export const labTests = pgTable("lab_tests", {
   doctorId: varchar("doctor_id")
     .notNull()
     .references(() => doctors.id),
+  labFacilityId: varchar("lab_facility_id").references(() => labFacilities.id), // Selected lab facility
   labTechnicianId: varchar("lab_technician_id").references(
     () => labTechnicians.id
-  ),
+  ), // Assigned technician
   testType: varchar("test_type").notNull(),
   testName: varchar("test_name").notNull(),
-  status: varchar("status").notNull(), // 'pending' | 'in_progress' | 'completed' | 'cancelled'
-  requestDate: timestamp("request_date").defaultNow(),
-  completionDate: timestamp("completion_date"),
+  status: varchar("status").notNull(), // 'pending' | 'approved' | 'in_progress' | 'completed' | 'cancelled'
+
+  // Enhanced Date Tracking
+  requestDate: timestamp("request_date").defaultNow(), // Doctor ordered
+  approvedDate: timestamp("approved_date"), // Lab technician approved
+  sampleCollectionDate: timestamp("sample_collection_date"), // Sample collected
+  testStartDate: timestamp("test_start_date"), // Testing started
+  completionDate: timestamp("completion_date"), // Results ready
+
   results: text("results"),
   resultFileUrl: varchar("result_file_url"),
   isAbnormal: boolean("is_abnormal").default(false),
-  notes: text("notes"),
+  notes: text("notes"), // Doctor's notes
+  technicianNotes: text("technician_notes"), // Lab technician's notes
+  urgency: varchar("urgency").default("normal"), // 'urgent' | 'normal' | 'routine'
+
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -663,6 +701,17 @@ export const prescriptionItemsRelations = relations(
   })
 );
 
+export const labFacilitiesRelations = relations(
+  labFacilities,
+  ({ one, many }) => ({
+    labTechnician: one(labTechnicians, {
+      fields: [labFacilities.labTechnicianId],
+      references: [labTechnicians.id],
+    }),
+    labTests: many(labTests),
+  })
+);
+
 export const labTestsRelations = relations(labTests, ({ one }) => ({
   patient: one(patients, {
     fields: [labTests.patientId],
@@ -671,6 +720,10 @@ export const labTestsRelations = relations(labTests, ({ one }) => ({
   doctor: one(doctors, {
     fields: [labTests.doctorId],
     references: [doctors.id],
+  }),
+  labFacility: one(labFacilities, {
+    fields: [labTests.labFacilityId],
+    references: [labFacilities.id],
   }),
   labTechnician: one(labTechnicians, {
     fields: [labTests.labTechnicianId],
@@ -813,6 +866,13 @@ export const insertMedicineSchema = createInsertSchema(medicines).omit({
   updatedAt: true,
 });
 
+// Lab facility schemas
+export const insertLabFacilitySchema = createInsertSchema(labFacilities).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 // Lab test schemas
 export const insertLabTestSchema = createInsertSchema(labTests).omit({
   id: true,
@@ -904,6 +964,9 @@ export type PrescriptionItem = typeof prescriptionItems.$inferSelect;
 
 export type InsertMedicine = z.infer<typeof insertMedicineSchema>;
 export type Medicine = typeof medicines.$inferSelect;
+
+export type InsertLabFacility = z.infer<typeof insertLabFacilitySchema>;
+export type LabFacility = typeof labFacilities.$inferSelect;
 
 export type InsertLabTest = z.infer<typeof insertLabTestSchema>;
 export type LabTest = typeof labTests.$inferSelect;

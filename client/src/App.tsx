@@ -25,6 +25,8 @@ import DoctorPatients from "@/pages/doctor-patients";
 import DoctorMedicalRecords from "@/pages/doctor-medical-records";
 import DoctorAvailability from "@/pages/doctor-availability";
 import LabTests from "@/pages/lab-tests";
+import LabResults from "@/pages/lab-results";
+import LabTechnicianTests from "@/pages/lab-technician-tests";
 import FindDoctors from "@/pages/find-doctors";
 import AdminDoctors from "@/pages/admin-doctors";
 import AdminAppointments from "@/pages/admin-appointments";
@@ -62,6 +64,7 @@ function Router() {
       "/notifications",
       "/lab-results",
       "/lab-tests",
+      "/lab-technician-tests",
       "/bills",
       "/patients",
       "/doctors",
@@ -104,8 +107,9 @@ function Router() {
       <Route path="/medical-records" component={MedicalRecords} />
       <Route path="/messages" component={Messages} />
       <Route path="/notifications" component={Notifications} />
-      <Route path="/lab-results" component={Dashboard} />
+      <Route path="/lab-results" component={LabResults} />
       <Route path="/lab-tests" component={LabTests} />
+      <Route path="/lab-technician-tests" component={LabTechnicianTests} />
       <Route path="/bills" component={Dashboard} />
       <Route path="/patients" component={AdminPatients} />
       <Route path="/doctor/patients" component={DoctorPatients} />
