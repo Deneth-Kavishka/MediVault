@@ -25,6 +25,7 @@ export default function MobileScanner() {
   const [showScanner, setShowScanner] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const sessionIdRef = useRef<string>("");
+  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Get pairing code from URL if provided
   useEffect(() => {
@@ -35,6 +36,13 @@ export default function MobileScanner() {
       // Auto-connect if code is in URL
       setTimeout(() => connectWithCode(code), 500);
     }
+
+    // Cleanup on unmount
+    return () => {
+      if (heartbeatIntervalRef.current) {
+        clearInterval(heartbeatIntervalRef.current);
+      }
+    };
   }, []);
 
   const connectWithCode = (code: string) => {
@@ -76,6 +84,18 @@ export default function MobileScanner() {
             console.log("✅ Mobile: Pairing successful!");
             sessionIdRef.current = data.sessionId;
             setStatus("connected");
+
+            // Set up heartbeat to keep connection alive
+            if (heartbeatIntervalRef.current) {
+              clearInterval(heartbeatIntervalRef.current);
+            }
+            heartbeatIntervalRef.current = setInterval(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                console.log("💓 Mobile: Sending heartbeat ping");
+                ws.send(JSON.stringify({ type: "ping" }));
+              }
+            }, 25000); // Send ping every 25 seconds
+
             toast({
               title: "Connected to PC",
               description: "Ready to scan prescription QR codes",
@@ -155,44 +175,97 @@ export default function MobileScanner() {
   };
 
   const handleScan = (qrData: string) => {
-    console.log("🔵 handleScan called with:", qrData.substring(0, 50) + "...");
-    console.log("🔍 WebSocket state:", wsRef.current?.readyState);
+    console.log("=== MOBILE SCAN START ===");
+    console.log(
+      "🔵 handleScan called with QR data:",
+      qrData.substring(0, 50) + "..."
+    );
+    console.log("🔍 WebSocket exists:", !!wsRef.current);
+    console.log(
+      "🔍 WebSocket state:",
+      wsRef.current?.readyState,
+      "(OPEN=",
+      WebSocket.OPEN,
+      ")"
+    );
     console.log("🔍 Session ID:", sessionIdRef.current);
+    console.log("🔍 Connection status:", status);
 
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+    if (!wsRef.current) {
+      console.error("❌ WebSocket reference is null!");
+      toast({
+        title: "Connection Error",
+        description: "WebSocket not initialized. Try reconnecting.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (wsRef.current.readyState !== WebSocket.OPEN) {
+      console.error(
+        "❌ WebSocket not in OPEN state! Current:",
+        wsRef.current.readyState
+      );
+      toast({
+        title: "Connection Error",
+        description: `WebSocket not ready (state: ${wsRef.current.readyState}). Try reconnecting.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!sessionIdRef.current) {
+      console.error("❌ No session ID!");
+      toast({
+        title: "Connection Error",
+        description: "No active session. Try reconnecting.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
       const message = {
         type: "mobile_scan_result",
         sessionId: sessionIdRef.current,
         qrData,
       };
+      const messageStr = JSON.stringify(message);
       console.log(
-        "📤 Mobile: Sending message:",
-        JSON.stringify(message).substring(0, 100)
+        "📤 Mobile: Sending message (length:",
+        messageStr.length,
+        "):"
       );
-      wsRef.current.send(JSON.stringify(message));
+      console.log("📤 Message preview:", messageStr.substring(0, 200) + "...");
+
+      wsRef.current.send(messageStr);
+      console.log("✅ Message sent successfully!");
 
       // Show immediate feedback
       toast({
         title: "📤 Sending to PC",
         description: "Prescription data is being sent...",
       });
-    } else {
-      console.error(
-        "❌ Mobile: WebSocket not connected! State:",
-        wsRef.current?.readyState
-      );
-      console.error("❌ WebSocket.OPEN constant:", WebSocket.OPEN);
+    } catch (error) {
+      console.error("❌ Error sending message:", error);
       toast({
-        title: "Connection Error",
-        description: `Not connected to PC. WebSocket state: ${wsRef.current?.readyState}`,
+        title: "Send Error",
+        description:
+          error instanceof Error ? error.message : "Failed to send data",
         variant: "destructive",
       });
     }
+    console.log("=== MOBILE SCAN END ===");
   };
 
   const disconnect = () => {
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
     if (wsRef.current) {
       wsRef.current.close();
+      wsRef.current = null;
     }
     setStatus("disconnected");
     setPairingCode("");

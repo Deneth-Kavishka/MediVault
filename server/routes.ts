@@ -2705,26 +2705,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           qrCode
         );
 
-        // Find prescription by QR code with patient and doctor info
+        // Find prescription by QR code
         const result = await db
-          .select({
-            id: prescriptions.id,
-            patientId: prescriptions.patientId,
-            doctorId: prescriptions.doctorId,
-            status: prescriptions.status,
-            issuedDate: prescriptions.dateIssued,
-            expiryDate: prescriptions.expiryDate,
-            diagnosis: prescriptions.diagnosis,
-            specialInstructions: prescriptions.specialInstructions,
-            notes: prescriptions.notes,
-            qrCode: prescriptions.qrCode,
-            scannedCount: prescriptions.scannedCount,
-            lastScannedAt: prescriptions.lastScannedAt,
-            dispensedAt: prescriptions.dispensedAt,
-            pharmacistNotes: prescriptions.pharmacistNotes,
-            substitutedMedications: prescriptions.substitutedMedications,
-            counselingNotes: prescriptions.counselingNotes,
-          })
+          .select()
           .from(prescriptions)
           .where(eq(prescriptions.qrCode, qrCode))
           .limit(1);
@@ -2796,7 +2779,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           qrCode: prescriptionData.qrCode,
           patientName: patientName,
           doctorName: doctorName,
-          issuedDate: prescriptionData.issuedDate,
+          issuedDate: prescriptionData.dateIssued,
           expiryDate: prescriptionData.expiryDate,
           status: prescriptionData.status,
           diagnosis: prescriptionData.diagnosis,

@@ -19,11 +19,13 @@ import {
   Check,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+// @ts-ignore
 import QRCodeLib from "qrcode";
 
 interface RemoteScannerPairingProps {
   onScanSuccess: (qrData: string) => void;
   onClose: () => void;
+  onConnectionChange?: (isConnected: boolean) => void;
 }
 
 type ConnectionStatus =
@@ -35,6 +37,7 @@ type ConnectionStatus =
 export function RemoteScannerPairing({
   onScanSuccess,
   onClose,
+  onConnectionChange,
 }: RemoteScannerPairingProps) {
   const { toast } = useToast();
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
@@ -63,13 +66,15 @@ export function RemoteScannerPairing({
         setStatus("disconnected");
       });
 
+    // DON'T cleanup WebSocket on unmount - keep connection alive
+    // Connection persists so mobile can continue scanning even if dialog is closed
     return () => {
+      // Only cleanup heartbeat interval, keep WebSocket connection open
       if (heartbeatIntervalRef.current) {
         clearInterval(heartbeatIntervalRef.current);
       }
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
+      // DO NOT close WebSocket here - connection should persist
+      console.log("🔄 Dialog closed but keeping WebSocket connection alive");
     };
   }, []);
 
@@ -149,6 +154,7 @@ export function RemoteScannerPairing({
 
             case "mobile_disconnected":
               setStatus("waiting_mobile");
+              onConnectionChange?.(false);
               toast({
                 title: "Mobile Disconnected",
                 description: "Please reconnect your mobile device",
@@ -220,6 +226,22 @@ export function RemoteScannerPairing({
     }
   };
 
+  const disconnect = () => {
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+    }
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    setStatus("disconnected");
+    onConnectionChange?.(false);
+    toast({
+      title: "Disconnected",
+      description: "Scanner connection closed",
+    });
+  };
+
   const reconnect = () => {
     if (wsRef.current) {
       wsRef.current.close();
@@ -239,169 +261,192 @@ export function RemoteScannerPairing({
   };
 
   return (
-    <Card className="w-full border-0 shadow-none">
-      <CardHeader className="px-0 pt-0">
-        <CardTitle className="flex items-center gap-2 text-xl">
-          <Smartphone className="h-5 w-5" />
-          Remote Mobile Scanner
-        </CardTitle>
-        <CardDescription>
-          Connect your mobile phone as a QR scanner
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4 px-0 pb-0">
-        {/* Localhost Warning */}
-        {(window.location.hostname === "localhost" ||
-          window.location.hostname === "127.0.0.1") && (
-          <div className="bg-red-50 dark:bg-red-950 border-2 border-red-500 rounded-lg p-4">
-            <div className="flex gap-3">
-              <AlertCircle className="h-6 w-6 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
-              <div className="space-y-2">
-                <p className="font-bold text-red-900 dark:text-red-100 text-base">
-                  ⚠️ Cannot Use Mobile Scanner with Localhost
+    <div className="w-full space-y-4">
+      {/* Localhost Warning */}
+      {(window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1") && (
+        <div className="bg-amber-50 dark:bg-amber-950 border-2 border-amber-500 rounded-lg p-4">
+          <div className="flex gap-3">
+            <AlertCircle className="h-6 w-6 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="space-y-2">
+              <p className="font-bold text-amber-900 dark:text-amber-100 text-base">
+                ⚠️ Cannot Use Mobile Scanner with Localhost
+              </p>
+              <p className="text-amber-800 dark:text-amber-200 text-sm font-medium">
+                Mobile devices cannot access localhost. Follow these steps:
+              </p>
+              <div className="bg-amber-100 dark:bg-amber-900 rounded p-3 space-y-2">
+                <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">
+                  1. Find Your PC's IP Address:
                 </p>
-                <p className="text-red-800 dark:text-red-200 text-sm font-medium">
-                  Mobile devices cannot access localhost. Follow these steps:
+                <code className="block bg-white dark:bg-black px-2 py-1 rounded text-xs">
+                  ipconfig
+                </code>
+
+                <p className="text-sm font-semibold text-amber-900 dark:text-amber-100 pt-2">
+                  2. Close This Tab and Open:
                 </p>
-                <div className="bg-red-100 dark:bg-red-900 rounded p-3 space-y-2">
-                  <p className="text-sm font-semibold text-red-900 dark:text-red-100">
-                    1. Find Your PC's IP Address:
-                  </p>
-                  <code className="block bg-white dark:bg-black px-2 py-1 rounded text-xs">
-                    ipconfig
-                  </code>
+                <code className="block bg-white dark:bg-black px-2 py-1 rounded text-xs">
+                  http://[YOUR-IP]:5000
+                </code>
+                <p className="text-xs text-amber-700 dark:text-amber-300">
+                  Example: http://192.168.1.100:5000
+                </p>
 
-                  <p className="text-sm font-semibold text-red-900 dark:text-red-100 pt-2">
-                    2. Close This Tab and Open:
-                  </p>
-                  <code className="block bg-white dark:bg-black px-2 py-1 rounded text-xs">
-                    http://[YOUR-IP]:5000
-                  </code>
-                  <p className="text-xs text-red-700 dark:text-red-300">
-                    Example: http://192.168.1.100:5000
-                  </p>
-
-                  <p className="text-sm font-semibold text-red-900 dark:text-red-100 pt-2">
-                    3. Then Use Mobile Camera
-                  </p>
-                </div>
+                <p className="text-sm font-semibold text-amber-900 dark:text-amber-100 pt-2">
+                  3. Then Use Mobile Camera
+                </p>
               </div>
             </div>
           </div>
-        )}
-
-        {/* Connection Status */}
-        <div className="flex items-center justify-between p-4 bg-muted rounded-lg">
-          <div className="flex items-center gap-2">
-            {status === "connected" ? (
-              <>
-                <Wifi className="h-5 w-5 text-green-600" />
-                <span className="font-medium">Connected</span>
-              </>
-            ) : status === "connecting" ? (
-              <>
-                <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
-                <span className="font-medium">Connecting...</span>
-              </>
-            ) : status === "waiting_mobile" ? (
-              <>
-                <Smartphone className="h-5 w-5 text-amber-600 animate-pulse" />
-                <span className="font-medium">Waiting for Mobile</span>
-              </>
-            ) : (
-              <>
+        </div>
+      )}{" "}
+      {/* Connection Status */}
+      <div className="flex items-center justify-between p-4 bg-muted rounded-lg border">
+        <div className="flex items-center gap-3">
+          {status === "connected" ? (
+            <>
+              <div className="w-10 h-10 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center">
+                <Wifi className="h-5 w-5 text-green-600 dark:text-green-400" />
+              </div>
+              <span className="font-semibold">Connected</span>
+            </>
+          ) : status === "connecting" ? (
+            <>
+              <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center">
+                <Loader2 className="h-5 w-5 animate-spin text-blue-600 dark:text-blue-400" />
+              </div>
+              <span className="font-semibold">Connecting...</span>
+            </>
+          ) : status === "waiting_mobile" ? (
+            <>
+              <div className="w-10 h-10 bg-amber-100 dark:bg-amber-900 rounded-full flex items-center justify-center">
+                <Smartphone className="h-5 w-5 text-amber-600 dark:text-amber-400 animate-pulse" />
+              </div>
+              <span className="font-semibold">Waiting for Mobile</span>
+            </>
+          ) : (
+            <>
+              <div className="w-10 h-10 bg-red-100 dark:bg-red-900 rounded-full flex items-center justify-center">
                 <WifiOff className="h-5 w-5 text-destructive" />
-                <span className="font-medium">Disconnected</span>
-              </>
+              </div>
+              <span className="font-semibold">Disconnected</span>
+            </>
+          )}
+        </div>
+        <Badge
+          variant={status === "connected" ? "default" : "secondary"}
+          className="text-xs px-3 py-1"
+        >
+          {status === "connected" && <CheckCircle className="h-3 w-3 mr-1" />}
+          {status.replace("_", " ").toUpperCase()}
+        </Badge>
+      </div>
+      {/* Pairing Instructions */}
+      {status === "waiting_mobile" && (
+        <div className="space-y-5">
+          <div className="text-center space-y-4">
+            <div>
+              <p className="text-base font-semibold text-foreground mb-1">
+                Connect Your Mobile Device
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Scan this QR code with your mobile phone
+              </p>
+            </div>
+            {qrCodeUrl && (
+              <div className="bg-white dark:bg-gray-100 p-6 rounded-xl inline-block shadow-xl border-2 border-primary/20">
+                <img
+                  src={qrCodeUrl}
+                  alt="Pairing QR Code"
+                  className="w-56 h-56 sm:w-64 sm:h-64 mx-auto"
+                />
+              </div>
             )}
           </div>
-          <Badge variant={status === "connected" ? "default" : "secondary"}>
-            {status === "connected" && <CheckCircle className="h-3 w-3 mr-1" />}
-            {status.replace("_", " ").toUpperCase()}
-          </Badge>
+
+          <div className="relative py-3">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-background px-3 text-muted-foreground font-medium">
+                Or enter code manually
+              </span>
+            </div>
+          </div>
+
+          <div className="text-center space-y-3 bg-primary/5 rounded-xl p-5 border-2 border-dashed border-primary/30">
+            <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              Pairing Code
+            </p>
+            <div className="text-4xl sm:text-5xl font-bold tracking-widest text-primary bg-background py-4 px-6 rounded-lg shadow-inner border-2 border-primary/20">
+              {pairingCode}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Enter this code on your mobile device
+            </p>
+          </div>
         </div>
-
-        {/* Pairing Instructions */}
-        {status === "waiting_mobile" && (
-          <div className="space-y-4">
-            <div className="text-center space-y-3">
-              <p className="text-sm text-muted-foreground">
-                Scan this QR code with your mobile device:
-              </p>
-              {qrCodeUrl && (
-                <div className="bg-white p-6 rounded-lg inline-block shadow-lg">
-                  <img
-                    src={qrCodeUrl}
-                    alt="Pairing QR Code"
-                    className="w-64 h-64 sm:w-72 sm:h-72 mx-auto"
-                  />
-                </div>
-              )}
-            </div>
-
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-background px-2 text-muted-foreground">
-                  Or enter code manually
-                </span>
-              </div>
-            </div>
-
-            <div className="text-center space-y-2">
-              <p className="text-sm font-medium text-muted-foreground">
-                Pairing Code:
-              </p>
-              <div className="text-3xl sm:text-4xl font-bold tracking-wider text-primary bg-primary/10 py-3 px-4 rounded-lg">
-                {pairingCode}
-              </div>
-              <p className="text-xs text-muted-foreground pt-2">
-                Enter this code on your mobile device
-              </p>
-            </div>
+      )}
+      {/* Connected State */}
+      {status === "connected" && (
+        <div className="text-center space-y-5 py-8 bg-green-50 dark:bg-green-950 rounded-xl border-2 border-green-200 dark:border-green-800">
+          <div className="w-20 h-20 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center mx-auto shadow-lg">
+            <CheckCircle className="h-10 w-10 text-green-600 dark:text-green-400" />
           </div>
-        )}
-
-        {/* Connected State */}
-        {status === "connected" && (
-          <div className="text-center space-y-4 py-8">
-            <div className="w-16 h-16 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center mx-auto">
-              <Smartphone className="h-8 w-8 text-green-600 dark:text-green-400" />
-            </div>
-            <div>
-              <p className="font-semibold text-lg">Mobile Scanner Ready</p>
-              <p className="text-sm text-muted-foreground">
-                Use your mobile device to scan prescription QR codes
-              </p>
-            </div>
+          <div className="space-y-2">
+            <p className="font-bold text-xl text-green-900 dark:text-green-100">
+              Mobile Scanner Ready! ✓
+            </p>
+            <p className="text-sm text-green-700 dark:text-green-300 max-w-sm mx-auto">
+              Your mobile device is connected. Use it to scan prescription QR
+              codes.
+            </p>
           </div>
-        )}
-
-        {/* Action Buttons */}
-        <div className="flex flex-col sm:flex-row gap-2 pt-2">
-          {status === "disconnected" && (
-            <Button onClick={reconnect} className="flex-1 w-full">
-              <Wifi className="h-4 w-4 mr-2" />
-              Connect
-            </Button>
-          )}
-          {status === "waiting_mobile" && (
-            <Button
-              onClick={reconnect}
-              variant="outline"
-              className="flex-1 w-full"
-            >
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              Generate New Code
-            </Button>
-          )}
-          <Button onClick={onClose} variant="outline" className="flex-1 w-full">
-            Close
+        </div>
+      )}
+      {/* Action Buttons */}
+      <div className="flex flex-col sm:flex-row gap-3 pt-2">
+        {status === "disconnected" && (
+          <Button
+            onClick={reconnect}
+            className="flex-1 w-full h-auto py-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 shadow-md hover:shadow-lg transition-all"
+          >
+            <Wifi className="h-4 w-4 mr-2" />
+            <span className="font-medium">Connect</span>
           </Button>
-        </div>
-      </CardContent>
-    </Card>
+        )}
+        {status === "waiting_mobile" && (
+          <Button
+            onClick={reconnect}
+            variant="outline"
+            className="flex-1 w-full h-auto py-3 shadow-md hover:shadow-lg transition-all"
+          >
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            <span className="font-medium">Generate New Code</span>
+          </Button>
+        )}
+        {status === "connected" && (
+          <Button
+            onClick={disconnect}
+            variant="destructive"
+            className="flex-1 w-full h-auto py-3 shadow-md hover:shadow-lg transition-all"
+          >
+            <WifiOff className="h-4 w-4 mr-2" />
+            <span className="font-medium">Disconnect Mobile</span>
+          </Button>
+        )}
+        <Button
+          onClick={onClose}
+          variant="outline"
+          className="flex-1 w-full h-auto py-3 shadow-md hover:shadow-lg transition-all"
+        >
+          <span className="font-medium">
+            {status === "connected" ? "Hide (Keep Connected)" : "Close"}
+          </span>
+        </Button>
+      </div>
+    </div>
   );
 }

@@ -21,6 +21,7 @@ import {
   Pill,
   AlertCircle,
   CheckCircle,
+  Clock,
 } from "lucide-react";
 import { format, isPast } from "date-fns";
 
@@ -244,10 +245,46 @@ export default function PrescriptionDetailsDialog({
                 className={`font-medium ${isExpired ? "text-destructive" : ""}`}
               >
                 {format(new Date(prescription.expiryDate), "PPP")}
-                {isExpired ? " (Expired)" : ""}
+                {isExpired && " (Expired)"}
               </p>
             </div>
           </div>
+
+          {/* Scan & Dispense Timestamps */}
+          {((prescription as any).lastScannedAt || (prescription as any).dispensedAt) && (
+            <div className="bg-muted/30 p-4 rounded-lg border border-border space-y-3">
+              <Label className="text-sm font-medium text-muted-foreground">
+                Tracking Information
+              </Label>
+              <div className="grid grid-cols-2 gap-4">
+                {(prescription as any).lastScannedAt && (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Clock className="h-3.5 w-3.5" />
+                      <span className="font-medium">Last Scanned</span>
+                    </div>
+                    <p className="text-sm font-medium">
+                      {format(
+                        new Date((prescription as any).lastScannedAt),
+                        "PPP 'at' p"
+                      )}
+                    </p>
+                  </div>
+                )}
+                {(prescription as any).dispensedAt && (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-xs text-green-600 dark:text-green-400">
+                      <CheckCircle className="h-3.5 w-3.5" />
+                      <span className="font-medium">Dispensed</span>
+                    </div>
+                    <p className="text-sm font-medium text-green-600 dark:text-green-400">
+                      {format(new Date((prescription as any).dispensedAt), "PPP 'at' p")}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           <Separator />
 
@@ -306,70 +343,100 @@ export default function PrescriptionDetailsDialog({
 
           {/* Pharmacist Notes Section - Only show if prescription can be processed */}
           {(canDispense || prescription.status === "issued") && (
-            <div className="space-y-4 bg-muted/50 p-4 rounded-lg">
-              <h3 className="font-semibold">Dispensing Details</h3>
-
-              <div className="space-y-2">
-                <Label htmlFor="pharmacistNotes">
-                  Dispensing Instructions{" "}
-                  {!canDispense && <span className="text-destructive">*</span>}
-                </Label>
-                <Textarea
-                  id="pharmacistNotes"
-                  placeholder="Enter dispensing instructions, notes, or reason for expiry..."
-                  value={pharmacistNotes}
-                  onChange={(e) => setPharmacistNotes(e.target.value)}
-                  rows={3}
-                />
+            <div className="space-y-4 bg-gradient-to-br from-muted/30 to-muted/50 p-5 rounded-lg border border-border">
+              <div className="flex items-center gap-2 mb-1">
+                <div className="h-8 w-1 bg-primary rounded-full"></div>
+                <h3 className="font-semibold text-lg">Pharmacist Actions</h3>
               </div>
 
-              {canDispense && (
-                <>
-                  <div className="space-y-2">
-                    <Label htmlFor="quantityDispensed">
-                      Quantity Dispensed
-                    </Label>
-                    <Input
-                      id="quantityDispensed"
-                      placeholder="e.g., 30 tablets, 1 bottle, etc."
-                      value={quantityDispensed}
-                      onChange={(e) => setQuantityDispensed(e.target.value)}
-                    />
-                  </div>
+              <div className="space-y-4">
+                {/* Status Update Notes - Required for both dispense and expire */}
+                <div className="space-y-2">
+                  <Label
+                    htmlFor="pharmacistNotes"
+                    className="text-base font-medium"
+                  >
+                    Pharmacist Notes <span className="text-destructive">*</span>
+                    <span className="text-xs text-muted-foreground font-normal ml-2">
+                      (Required for status update)
+                    </span>
+                  </Label>
+                  <Textarea
+                    id="pharmacistNotes"
+                    placeholder={
+                      canDispense
+                        ? "Enter dispensing instructions, patient counseling notes, or any important information..."
+                        : "Explain the reason for marking as expired (e.g., prescription date passed, patient did not collect, etc.)"
+                    }
+                    value={pharmacistNotes}
+                    onChange={(e) => setPharmacistNotes(e.target.value)}
+                    rows={4}
+                    className="resize-none"
+                  />
+                </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="substitutedMedications">
-                      Substituted Medications (if any)
-                    </Label>
-                    <Textarea
-                      id="substitutedMedications"
-                      placeholder="Enter details of any medication substitutions..."
-                      value={substitutedMedications}
-                      onChange={(e) =>
-                        setSubstitutedMedications(e.target.value)
-                      }
-                      rows={2}
-                    />
-                  </div>
+                {canDispense && (
+                  <>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label
+                          htmlFor="quantityDispensed"
+                          className="font-medium"
+                        >
+                          Quantity Dispensed
+                        </Label>
+                        <Input
+                          id="quantityDispensed"
+                          placeholder="e.g., 30 tablets"
+                          value={quantityDispensed}
+                          onChange={(e) => setQuantityDispensed(e.target.value)}
+                        />
+                      </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="counselingNotes">Counseling Notes</Label>
-                    <Textarea
-                      id="counselingNotes"
-                      placeholder="Enter patient counseling notes..."
-                      value={counselingNotes}
-                      onChange={(e) => setCounselingNotes(e.target.value)}
-                      rows={3}
-                    />
-                  </div>
-                </>
-              )}
+                      <div className="space-y-2">
+                        <Label
+                          htmlFor="substitutedMedications"
+                          className="font-medium"
+                        >
+                          Substitutions (if any)
+                        </Label>
+                        <Input
+                          id="substitutedMedications"
+                          placeholder="Enter substituted meds"
+                          value={substitutedMedications}
+                          onChange={(e) =>
+                            setSubstitutedMedications(e.target.value)
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="counselingNotes" className="font-medium">
+                        Patient Counseling Notes
+                      </Label>
+                      <Textarea
+                        id="counselingNotes"
+                        placeholder="Enter patient counseling information, instructions, warnings, etc."
+                        value={counselingNotes}
+                        onChange={(e) => setCounselingNotes(e.target.value)}
+                        rows={3}
+                        className="resize-none"
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           )}
 
           {/* Action Buttons */}
-          <div className="flex gap-2 justify-end">
-            <Button variant="outline" onClick={handleClose}>
+          <div className="flex gap-3 justify-end pt-2">
+            <Button
+              variant="outline"
+              onClick={handleClose}
+              className="min-w-[100px]"
+            >
               Cancel
             </Button>
 
@@ -378,8 +445,10 @@ export default function PrescriptionDetailsDialog({
                 {!isExpired && (
                   <Button
                     onClick={handleDispense}
-                    disabled={dispenseMutation.isPending}
-                    className="bg-green-600 hover:bg-green-700"
+                    disabled={
+                      dispenseMutation.isPending || !pharmacistNotes.trim()
+                    }
+                    className="bg-green-600 hover:bg-green-700 min-w-[160px] shadow-md"
                   >
                     <CheckCircle className="h-4 w-4 mr-2" />
                     {dispenseMutation.isPending
@@ -391,7 +460,10 @@ export default function PrescriptionDetailsDialog({
                 <Button
                   variant="destructive"
                   onClick={handleMarkExpired}
-                  disabled={dispenseMutation.isPending}
+                  disabled={
+                    dispenseMutation.isPending || !pharmacistNotes.trim()
+                  }
+                  className="min-w-[140px] shadow-md"
                 >
                   <AlertCircle className="h-4 w-4 mr-2" />
                   {dispenseMutation.isPending
@@ -401,6 +473,13 @@ export default function PrescriptionDetailsDialog({
               </>
             )}
           </div>
+
+          {/* Note requirement reminder */}
+          {prescription.status === "issued" && !pharmacistNotes.trim() && (
+            <p className="text-sm text-amber-600 dark:text-amber-400 text-center -mt-2">
+              ⚠️ Pharmacist notes are required to update status
+            </p>
+          )}
         </div>
       </DialogContent>
     </Dialog>

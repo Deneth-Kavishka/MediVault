@@ -150,7 +150,22 @@ export function QRScanner({ onScanSuccess, onClose }: QRScannerProps) {
     event: React.ChangeEvent<HTMLInputElement>
   ) => {
     const file = event.target.files?.[0];
-    if (!file) return;
+    if (!file) {
+      console.log("❌ No file selected");
+      return;
+    }
+
+    console.log("📸 File selected:", file.name, file.type, file.size);
+
+    // Validate file type
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "Invalid File",
+        description: "Please select an image file",
+        variant: "destructive",
+      });
+      return;
+    }
 
     // Show processing message
     toast({
@@ -163,37 +178,96 @@ export function QRScanner({ onScanSuccess, onClose }: QRScannerProps) {
       const reader = new FileReader();
 
       reader.onload = (e) => {
+        console.log("📖 FileReader onload triggered");
         img.onload = () => {
+          console.log(
+            "🖼️ Image loaded successfully:",
+            img.width,
+            "x",
+            img.height
+          );
           if (canvasRef.current) {
             const canvas = canvasRef.current;
-            const ctx = canvas.getContext("2d");
+            const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
             if (ctx) {
+              console.log("🎨 Canvas context obtained");
+              // Set canvas size to match image
               canvas.width = img.width;
               canvas.height = img.height;
-              ctx.drawImage(img, 0, 0);
 
-              const imageData = ctx.getImageData(
+              // Draw the image
+              ctx.drawImage(img, 0, 0);
+              console.log("🖌️ Image drawn to canvas");
+
+              // Try to scan the original image first
+              console.log(
+                "🔍 Starting QR code detection (attempt 1: no inversion)..."
+              );
+              let imageData = ctx.getImageData(
                 0,
                 0,
                 canvas.width,
                 canvas.height
               );
-              const code = jsQR(
+              let code = jsQR(
                 imageData.data,
                 imageData.width,
-                imageData.height
+                imageData.height,
+                {
+                  inversionAttempts: "dontInvert",
+                }
               );
+              console.log("Result:", code ? "✅ Found" : "❌ Not found");
+
+              // If not found, try with inverted colors
+              if (!code) {
+                console.log("🔄 Trying with color inversion (attempt 2)...");
+                code = jsQR(imageData.data, imageData.width, imageData.height, {
+                  inversionAttempts: "attemptBoth",
+                });
+                console.log("Result:", code ? "✅ Found" : "❌ Not found");
+              }
+
+              // If still not found, try with different scales
+              if (!code && (img.width > 1000 || img.height > 1000)) {
+                console.log(
+                  "🔄 Image is large, trying with scaled down version (attempt 3)..."
+                );
+                const scale = 800 / Math.max(img.width, img.height);
+                console.log("Scaling factor:", scale);
+                canvas.width = img.width * scale;
+                canvas.height = img.height * scale;
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                code = jsQR(imageData.data, imageData.width, imageData.height, {
+                  inversionAttempts: "attemptBoth",
+                });
+                console.log("Result:", code ? "✅ Found" : "❌ Not found");
+              }
 
               if (code) {
-                console.log(
-                  "📸 QR Code from uploaded image:",
-                  code.data.substring(0, 50) + "..."
-                );
-                setScannedData(code.data);
-                onScanSuccess(code.data);
+                console.log("✅ QR Code detected from uploaded image!");
+                console.log("📋 QR Code data:", code.data);
+                console.log("📤 Calling onScanSuccess callback...");
 
-                // Don't close - ready for next upload
+                setScannedData(code.data);
+
+                // Show success feedback immediately
+                toast({
+                  title: "✅ QR Code Detected!",
+                  description: "Verifying prescription...",
+                  duration: 2000,
+                });
+
+                // Call parent handler - THIS IS THE IMPORTANT PART
+                try {
+                  onScanSuccess(code.data);
+                  console.log("✅ onScanSuccess called successfully");
+                } catch (error) {
+                  console.error("❌ Error in onScanSuccess:", error);
+                }
+
                 // Clear the file input so same file can be uploaded again
                 if (fileInputRef.current) {
                   fileInputRef.current.value = "";
@@ -204,20 +278,51 @@ export function QRScanner({ onScanSuccess, onClose }: QRScannerProps) {
                   setScannedData(null);
                 }, 3000);
               } else {
+                console.log("❌ No QR code detected in image");
                 toast({
                   title: "No QR Code Found",
                   description:
-                    "Could not detect a QR code in the image. Make sure the QR code is clear and well-lit.",
+                    "Could not detect a QR code in the image. Please ensure the QR code is clear, well-lit, and fills most of the frame.",
                   variant: "destructive",
-                  duration: 5000,
+                  duration: 6000,
                 });
+
+                // Clear the file input
+                if (fileInputRef.current) {
+                  fileInputRef.current.value = "";
+                }
               }
             }
           }
         };
+
+        img.onerror = () => {
+          console.error("❌ Failed to load image");
+          toast({
+            title: "Image Load Error",
+            description:
+              "Failed to load the image file. Please try another image.",
+            variant: "destructive",
+          });
+          if (fileInputRef.current) {
+            fileInputRef.current.value = "";
+          }
+        };
+
+        console.log("🔗 Setting image source...");
         img.src = e.target?.result as string;
       };
 
+      reader.onerror = () => {
+        console.error("❌ Failed to read file");
+        toast({
+          title: "File Read Error",
+          description: "Failed to read the file. Please try again.",
+          variant: "destructive",
+        });
+      };
+
+      console.log("📖 Starting FileReader...");
       reader.readAsDataURL(file);
     } catch (error) {
       console.error("Error reading image:", error);
@@ -226,6 +331,9 @@ export function QRScanner({ onScanSuccess, onClose }: QRScannerProps) {
         description: "Failed to read the image file.",
         variant: "destructive",
       });
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     }
   };
 
@@ -238,116 +346,125 @@ export function QRScanner({ onScanSuccess, onClose }: QRScannerProps) {
 
   return (
     <div className="w-full space-y-4">
-      <Card className="w-full">
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="flex items-center gap-2">
-            <ScanLine className="h-5 w-5" />
-            Scan Prescription QR Code
-          </CardTitle>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-              stopScanning();
-              onClose();
-            }}
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {!isScanning ? (
-            <div className="text-center py-8 space-y-4">
-              <Camera className="h-16 w-16 mx-auto text-muted-foreground" />
-              <p className="text-muted-foreground">
-                Choose a method to scan the QR code
+      {/* Hidden canvas for image processing - always present */}
+      <canvas ref={canvasRef} className="hidden" />
+
+      <div className="space-y-4">
+        {!isScanning ? (
+          <div className="text-center py-6 space-y-5">
+            <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto">
+              <Camera className="h-8 w-8 text-primary" />
+            </div>
+            <div>
+              <p className="text-base font-medium text-foreground mb-1">
+                Choose Scanning Method
               </p>
-
-              <div className="space-y-3">
-                <Button onClick={startScanning} className="w-full">
-                  <Camera className="h-4 w-4 mr-2" />
-                  Use Live Camera
-                </Button>
-
-                <div className="relative">
-                  <div className="absolute inset-0 flex items-center">
-                    <span className="w-full border-t" />
-                  </div>
-                  <div className="relative flex justify-center text-xs uppercase">
-                    <span className="bg-background px-2 text-muted-foreground">
-                      Or
-                    </span>
-                  </div>
-                </div>
-
-                <Button
-                  onClick={() => fileInputRef.current?.click()}
-                  variant="outline"
-                  className="w-full"
-                >
-                  <Camera className="h-4 w-4 mr-2" />
-                  Upload QR Code Photo
-                </Button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  onChange={handleFileUpload}
-                  className="hidden"
-                />
-              </div>
-
-              <p className="text-xs text-muted-foreground pt-2">
-                💡 Tip: If live camera doesn't work, use "Upload Photo" to take
-                a picture with your camera app
+              <p className="text-sm text-muted-foreground">
+                Select how you want to scan the QR code
               </p>
             </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="relative">
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  className="w-full rounded-lg"
-                />
-                <canvas ref={canvasRef} className="hidden" />
 
-                {/* Scanning overlay */}
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="w-64 h-64 border-4 border-primary rounded-lg animate-pulse" />
+            <div className="space-y-3 max-w-md mx-auto">
+              <Button
+                onClick={startScanning}
+                className="w-full h-auto py-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 shadow-md hover:shadow-lg hover:scale-105 transition-all duration-200"
+              >
+                <Camera className="h-5 w-5 mr-2" />
+                <span className="font-medium">Use Live Camera</span>
+              </Button>
+
+              <div className="relative py-2">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-background px-3 text-muted-foreground font-medium">
+                    Or
+                  </span>
                 </div>
               </div>
 
-              <div className="flex items-center justify-between">
-                <Badge variant="outline" className="text-sm">
-                  <div className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse" />
-                  Scanning...
-                </Badge>
-                <Button variant="outline" onClick={stopScanning}>
-                  Stop Scanning
-                </Button>
+              <Button
+                onClick={() => fileInputRef.current?.click()}
+                variant="outline"
+                className="w-full h-auto py-3 shadow-md hover:shadow-lg hover:scale-105 transition-all duration-200"
+              >
+                <Camera className="h-5 w-5 mr-2" />
+                <span className="font-medium">Upload QR Code Photo</span>
+              </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+            </div>
+
+            <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg p-3 max-w-md mx-auto">
+              <p className="text-xs text-blue-900 dark:text-blue-100">
+                💡 <span className="font-medium">Tip:</span> If live camera
+                doesn't work, use "Upload Photo" to take a picture with your
+                camera app
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="relative rounded-lg overflow-hidden bg-black">
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                className="w-full rounded-lg"
+              />
+
+              {/* Scanning overlay */}
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="w-56 h-56 sm:w-64 sm:h-64 border-4 border-blue-500 rounded-lg shadow-lg shadow-blue-500/50">
+                  <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-blue-400 rounded-tl-lg"></div>
+                  <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-blue-400 rounded-tr-lg"></div>
+                  <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-blue-400 rounded-bl-lg"></div>
+                  <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-blue-400 rounded-br-lg"></div>
+                </div>
               </div>
+            </div>
 
-              <p className="text-xs text-muted-foreground text-center">
-                Position the QR code within the frame
+            <div className="flex items-center justify-between p-3 bg-muted rounded-lg">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                <span className="text-sm font-medium">Scanning Active</span>
+              </div>
+              <Button
+                variant="outline"
+                onClick={stopScanning}
+                size="sm"
+                className="shadow-sm"
+              >
+                Stop
+              </Button>
+            </div>
+
+            <div className="text-center bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
+              <p className="text-sm text-blue-900 dark:text-blue-100 font-medium">
+                📷 Position the QR code within the highlighted frame
               </p>
             </div>
-          )}
+          </div>
+        )}
 
-          {scannedData && (
-            <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-              <p className="text-sm font-medium text-green-900">
-                QR Code Detected
-              </p>
-              <p className="text-xs text-green-700 mt-1 font-mono break-all">
-                {scannedData}
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        {scannedData && (
+          <div className="p-4 bg-green-50 dark:bg-green-950 border-2 border-green-500 rounded-lg">
+            <p className="text-sm font-semibold text-green-900 dark:text-green-100">
+              ✅ QR Code Detected
+            </p>
+            <p className="text-xs text-green-700 dark:text-green-300 mt-1 font-mono break-all">
+              {scannedData}
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

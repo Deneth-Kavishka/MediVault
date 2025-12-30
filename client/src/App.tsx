@@ -34,6 +34,7 @@ import ReportsPage from "@/pages/reports";
 import SettingsPage from "@/pages/settings";
 import ContactPage from "@/pages/contact";
 import MobileScanner from "@/pages/mobile-scanner";
+import QRScannerPage from "@/pages/qr-scanner-page";
 import { useEffect } from "react";
 
 function Router() {
@@ -119,7 +120,7 @@ function Router() {
       <Route path="/doctors" component={AdminDoctors} />
       <Route path="/appointments-admin" component={AdminAppointments} />
       <Route path="/inventory" component={Dashboard} />
-      <Route path="/scanner" component={Dashboard} />
+      <Route path="/scanner" component={QRScannerPage} />
       <Route path="/test-results" component={Dashboard} />
       <Route path="/admin/users" component={AdminUsers} />
       <Route

@@ -96,7 +96,6 @@ export function AppSidebar() {
       ],
       pharmacist: [
         { title: "Prescriptions", url: "/prescriptions", icon: Pill },
-        { title: "Inventory", url: "/inventory", icon: Activity },
         { title: "QR Scanner", url: "/scanner", icon: Activity },
       ],
       lab_technician: [
