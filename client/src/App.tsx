@@ -33,6 +33,7 @@ import AdminAppointments from "@/pages/admin-appointments";
 import ReportsPage from "@/pages/reports";
 import SettingsPage from "@/pages/settings";
 import ContactPage from "@/pages/contact";
+import MobileScanner from "@/pages/mobile-scanner";
 import { useEffect } from "react";
 
 function Router() {
@@ -98,6 +99,7 @@ function Router() {
       {/* Public routes */}
       <Route path="/" component={Landing} />
       <Route path="/login" component={LoginPage} />
+      <Route path="/mobile-scanner" component={MobileScanner} />
       <Route path="/contact" component={ContactPage} />
 
       {/* Protected routes */}

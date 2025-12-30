@@ -20,6 +20,7 @@ import {
   Clock,
   Download,
   HardDrive,
+  Smartphone,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,9 @@ import {
   DashboardCustomization,
   useDashboardPreferences,
 } from "@/components/dashboard-customization";
+import { QRScanner } from "@/components/qr-scanner";
+import PrescriptionDetailsDialog from "@/components/prescription-details-dialog";
+import { RemoteScannerPairing } from "@/components/remote-scanner-pairing";
 
 export default function Dashboard() {
   const { user, isLoading, isAuthenticated } = useAuth();
@@ -562,68 +566,265 @@ function DoctorDashboard() {
 }
 
 function PharmacistDashboard() {
+  const [showQRScanner, setShowQRScanner] = useState(false);
+  const [showRemoteScanner, setShowRemoteScanner] = useState(false);
+  const [selectedPrescription, setSelectedPrescription] = useState<any>(null);
+  const [showPrescriptionDetails, setShowPrescriptionDetails] = useState(false);
+  const { toast } = useToast();
+
+  // Fetch pharmacist stats
+  const { data: stats, isLoading: statsLoading } = useQuery({
+    queryKey: ["/api/prescriptions/pharmacist/stats"],
+  });
+
+  // Fetch recent prescriptions scanned by pharmacist
+  const { data: recentPrescriptions, isLoading: prescriptionsLoading } =
+    useQuery({
+      queryKey: ["/api/prescriptions/pharmacist/recent"],
+    });
+
+  const handleQRScan = async (qrCode: string) => {
+    try {
+      const response = await fetch(`/api/prescriptions/scan/${qrCode}`, {
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || "Prescription not found");
+      }
+
+      const prescription = await response.json();
+
+      // Update last scanned timestamp
+      await fetch(`/api/prescriptions/${prescription.id}/scan-log`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      setSelectedPrescription(prescription);
+      setShowQRScanner(false);
+      setShowPrescriptionDetails(true);
+
+      toast({
+        title: "Prescription Found",
+        description: `Prescription for ${prescription.patientName}`,
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Invalid QR code",
+        variant: "destructive",
+      });
+    }
+  };
+
   const statsCards = [
     {
-      title: "Pending Prescriptions",
-      value: "15",
-      icon: Pill,
-      color: "text-chart-1",
+      title: "Scanned Today",
+      value: stats?.scannedToday || 0,
+      icon: Activity,
+      color: "text-blue-600",
     },
     {
-      title: "Low Stock Items",
-      value: "8",
-      icon: Activity,
-      color: "text-destructive",
+      title: "Pending",
+      value: stats?.pending || 0,
+      icon: Clock,
+      color: "text-amber-600",
     },
     {
       title: "Dispensed Today",
-      value: "42",
-      icon: Receipt,
-      color: "text-chart-2",
+      value: stats?.dispensedToday || 0,
+      icon: Pill,
+      color: "text-green-600",
     },
     {
-      title: "Restock Requests",
-      value: "3",
-      icon: Bell,
-      color: "text-chart-3",
+      title: "Total Completed",
+      value: stats?.totalCompleted || 0,
+      icon: Receipt,
+      color: "text-purple-600",
     },
   ];
 
   return (
     <div className="space-y-6">
+      {/* Stats Grid */}
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-        {statsCards.map((stat) => (
-          <Card key={stat.title}>
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                {stat.title}
-              </CardTitle>
-              <stat.icon className={`h-5 w-5 ${stat.color}`} />
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold text-foreground">
-                {stat.value}
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+        {statsLoading
+          ? Array.from({ length: 4 }).map((_, i) => (
+              <Card key={i}>
+                <CardHeader className="pb-2">
+                  <Skeleton className="h-4 w-32" />
+                </CardHeader>
+                <CardContent>
+                  <Skeleton className="h-8 w-16" />
+                </CardContent>
+              </Card>
+            ))
+          : statsCards.map((stat) => (
+              <Card
+                key={stat.title}
+                className="hover:shadow-md transition-shadow"
+              >
+                <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">
+                    {stat.title}
+                  </CardTitle>
+                  <stat.icon className={`h-5 w-5 ${stat.color}`} />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-3xl font-bold text-foreground">
+                    {stat.value}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
       </div>
 
+      {/* Quick Actions */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Quick Actions</CardTitle>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Activity className="h-5 w-5" />
+            Quick Actions
+          </CardTitle>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-3">
-          <Button data-testid="button-scan-qr">
+          <Button
+            onClick={() => setShowQRScanner(true)}
+            className="bg-blue-600 hover:bg-blue-700"
+            data-testid="button-scan-qr"
+          >
             <Activity className="w-4 h-4 mr-2" />
-            Scan QR Code
+            Scan with Webcam
           </Button>
-          <Button variant="outline" data-testid="button-inventory">
-            <Pill className="w-4 h-4 mr-2" />
-            Inventory
+          <Button
+            onClick={() => setShowRemoteScanner(true)}
+            variant="outline"
+            className="border-blue-600 text-blue-600 hover:bg-blue-50"
+          >
+            <Smartphone className="w-4 h-4 mr-2" />
+            Use Mobile Camera
           </Button>
         </CardContent>
       </Card>
+
+      {/* Recent Prescriptions */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <FileText className="h-5 w-5" />
+            Recent Scans
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {prescriptionsLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <Skeleton key={i} className="h-20 w-full" />
+              ))}
+            </div>
+          ) : recentPrescriptions && recentPrescriptions.length > 0 ? (
+            <ScrollArea className="h-[400px]">
+              <div className="space-y-3">
+                {recentPrescriptions.map((prescription: any) => (
+                  <div
+                    key={prescription.id}
+                    className="border rounded-lg p-4 hover:bg-muted/50 transition-colors cursor-pointer"
+                    onClick={() => {
+                      setSelectedPrescription(prescription);
+                      setShowPrescriptionDetails(true);
+                    }}
+                  >
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="space-y-1">
+                        <p className="font-semibold">
+                          {prescription.patientName}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          Dr. {prescription.doctorName}
+                        </p>
+                      </div>
+                      <Badge
+                        variant={
+                          prescription.status === "dispensed"
+                            ? "default"
+                            : prescription.status === "expired"
+                            ? "destructive"
+                            : "secondary"
+                        }
+                      >
+                        {prescription.status}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <Calendar className="h-3 w-3" />
+                        {new Date(prescription.issuedDate).toLocaleDateString()}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Pill className="h-3 w-3" />
+                        {prescription.medications?.length || 0} medication(s)
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          ) : (
+            <div className="text-center py-8 text-muted-foreground">
+              <FileText className="h-12 w-12 mx-auto mb-2 opacity-50" />
+              <p>No prescriptions scanned yet</p>
+              <p className="text-sm">Scan a QR code to get started</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* QR Scanner Dialog */}
+      {showQRScanner && (
+        <Dialog open={showQRScanner} onOpenChange={setShowQRScanner}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Scan Prescription QR Code</DialogTitle>
+              <DialogDescription>
+                Position the QR code within the camera frame
+              </DialogDescription>
+            </DialogHeader>
+            <div className="py-4">
+              <QRScanner
+                onScanSuccess={handleQRScan}
+                onClose={() => setShowQRScanner(false)}
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Remote Scanner Pairing Dialog */}
+      {showRemoteScanner && (
+        <Dialog open={showRemoteScanner} onOpenChange={setShowRemoteScanner}>
+          <DialogContent className="max-w-lg w-full mx-4 max-h-[95vh] overflow-y-auto p-6">
+            <RemoteScannerPairing
+              onScanSuccess={handleQRScan}
+              onClose={() => setShowRemoteScanner(false)}
+            />
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Prescription Details Dialog */}
+      {selectedPrescription && (
+        <PrescriptionDetailsDialog
+          open={showPrescriptionDetails}
+          onClose={() => {
+            setShowPrescriptionDetails(false);
+            setSelectedPrescription(null);
+          }}
+          prescription={selectedPrescription}
+        />
+      )}
     </div>
   );
 }

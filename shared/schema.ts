@@ -305,13 +305,16 @@ export const prescriptions = pgTable("prescriptions", {
   expiryDate: timestamp("expiry_date"),
   validityDays: integer("validity_days").default(90), // Number of days prescription is valid
   qrCode: text("qr_code"), // QR code data for verification
-  status: varchar("status").notNull(), // 'active' | 'dispensed' | 'expired' | 'cancelled'
+  status: varchar("status").notNull(), // 'issued' | 'dispensed' | 'expired' | 'cancelled'
   scannedCount: integer("scanned_count").default(0), // Number of times QR code scanned
   lastScannedAt: timestamp("last_scanned_at"), // Last scan timestamp
-  lastScannedBy: varchar("last_scanned_by"), // Pharmacist who last scanned
+  lastScannedBy: varchar("last_scanned_by").references(() => pharmacists.id), // Pharmacist who last scanned
   dispensedAt: timestamp("dispensed_at"), // When prescription was dispensed
-  dispensedBy: varchar("dispensed_by"), // Pharmacist who dispensed
-  notes: text("notes"),
+  dispensedBy: varchar("dispensed_by").references(() => pharmacists.id), // Pharmacist who dispensed
+  pharmacistNotes: text("pharmacist_notes"), // Dispensing instructions and notes
+  substitutedMedications: text("substituted_medications"), // JSON string of substituted meds
+  counselingNotes: text("counseling_notes"), // Patient counseling notes
+  notes: text("notes"), // General notes
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

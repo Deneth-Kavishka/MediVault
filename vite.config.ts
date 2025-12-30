@@ -21,5 +21,12 @@ export default defineConfig({
       strict: true,
       deny: ["**/.*"],
     },
+    proxy: {
+      "/ws": {
+        target: "ws://localhost:5000",
+        ws: true,
+        changeOrigin: true,
+      },
+    },
   },
 });

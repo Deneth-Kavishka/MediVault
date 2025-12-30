@@ -46,7 +46,7 @@ import {
   users,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and, gte, count } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -2689,6 +2689,404 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (error) {
         console.error("Error scanning prescription:", error);
         res.status(500).json({ message: "Failed to scan prescription" });
+      }
+    }
+  );
+
+  // Get prescription by QR code (for pharmacist scanning)
+  app.get(
+    "/api/prescriptions/scan/:qrCode",
+    isPharmacist,
+    async (req: any, res) => {
+      try {
+        const { qrCode } = req.params;
+        console.log(
+          "🔍 NEW CODE RUNNING: Fetching prescription with QR code:",
+          qrCode
+        );
+
+        // Find prescription by QR code with patient and doctor info
+        const result = await db
+          .select({
+            id: prescriptions.id,
+            patientId: prescriptions.patientId,
+            doctorId: prescriptions.doctorId,
+            status: prescriptions.status,
+            issuedDate: prescriptions.dateIssued,
+            expiryDate: prescriptions.expiryDate,
+            diagnosis: prescriptions.diagnosis,
+            specialInstructions: prescriptions.specialInstructions,
+            notes: prescriptions.notes,
+            qrCode: prescriptions.qrCode,
+            scannedCount: prescriptions.scannedCount,
+            lastScannedAt: prescriptions.lastScannedAt,
+            dispensedAt: prescriptions.dispensedAt,
+            pharmacistNotes: prescriptions.pharmacistNotes,
+            substitutedMedications: prescriptions.substitutedMedications,
+            counselingNotes: prescriptions.counselingNotes,
+          })
+          .from(prescriptions)
+          .where(eq(prescriptions.qrCode, qrCode))
+          .limit(1);
+
+        if (!result || result.length === 0) {
+          return res.status(404).json({ message: "Prescription not found" });
+        }
+
+        const prescriptionData = result[0];
+
+        // Get patient info
+        const patientData = await db
+          .select()
+          .from(patients)
+          .where(eq(patients.id, prescriptionData.patientId))
+          .limit(1);
+
+        let patientName = "Unknown Patient";
+        if (patientData && patientData.length > 0) {
+          const patientUser = await db
+            .select()
+            .from(users)
+            .where(eq(users.id, patientData[0].userId))
+            .limit(1);
+          if (patientUser && patientUser.length > 0) {
+            patientName = `${patientUser[0].firstName || ""} ${
+              patientUser[0].lastName || ""
+            }`.trim();
+          }
+        }
+
+        // Get doctor info
+        const doctorData = await db
+          .select()
+          .from(doctors)
+          .where(eq(doctors.id, prescriptionData.doctorId))
+          .limit(1);
+
+        let doctorName = "Unknown Doctor";
+        if (doctorData && doctorData.length > 0) {
+          const doctorUser = await db
+            .select()
+            .from(users)
+            .where(eq(users.id, doctorData[0].userId))
+            .limit(1);
+          if (doctorUser && doctorUser.length > 0) {
+            doctorName = `${doctorUser[0].firstName || ""} ${
+              doctorUser[0].lastName || ""
+            }`.trim();
+          }
+        }
+
+        // Get prescription items (medications)
+        const items = await db
+          .select()
+          .from(prescriptionItems)
+          .where(eq(prescriptionItems.prescriptionId, prescriptionData.id));
+
+        // Format medications
+        const medications = items.map((item: any) => ({
+          name: item.medicineName,
+          dosage: item.dosage,
+          frequency: item.frequency,
+          duration: item.duration,
+        }));
+
+        const response = {
+          id: prescriptionData.id,
+          qrCode: prescriptionData.qrCode,
+          patientName: patientName,
+          doctorName: doctorName,
+          issuedDate: prescriptionData.issuedDate,
+          expiryDate: prescriptionData.expiryDate,
+          status: prescriptionData.status,
+          diagnosis: prescriptionData.diagnosis,
+          specialInstructions: prescriptionData.specialInstructions,
+          medications,
+          pharmacistNotes: prescriptionData.pharmacistNotes,
+          substitutedMedications: prescriptionData.substitutedMedications,
+          counselingNotes: prescriptionData.counselingNotes,
+        };
+
+        res.json(response);
+      } catch (error) {
+        console.error("Error fetching prescription by QR:", error);
+        res.status(500).json({ message: "Failed to fetch prescription" });
+      }
+    }
+  );
+
+  // Log prescription scan (update last scanned timestamp)
+  app.post(
+    "/api/prescriptions/:id/scan-log",
+    isPharmacist,
+    async (req: any, res) => {
+      try {
+        const { id } = req.params;
+        const userId = req.user.id;
+
+        // Get pharmacist record
+        const pharmacist = await db
+          .select()
+          .from(sql`pharmacists`)
+          .where(sql`user_id = ${userId}`)
+          .limit(1);
+
+        if (!pharmacist || pharmacist.length === 0) {
+          return res
+            .status(404)
+            .json({ message: "Pharmacist profile not found" });
+        }
+
+        const pharmacistId = pharmacist[0].id;
+
+        const currentPrescription = await db
+          .select()
+          .from(prescriptions)
+          .where(eq(prescriptions.id, id))
+          .limit(1);
+
+        if (!currentPrescription || currentPrescription.length === 0) {
+          return res.status(404).json({ message: "Prescription not found" });
+        }
+
+        const scannedCount = (currentPrescription[0].scannedCount || 0) + 1;
+
+        await db
+          .update(prescriptions)
+          .set({
+            scannedCount,
+            lastScannedAt: new Date(),
+            lastScannedBy: pharmacistId,
+          })
+          .where(eq(prescriptions.id, id));
+
+        res.json({ success: true, scannedCount });
+      } catch (error) {
+        console.error("Error logging prescription scan:", error);
+        res.status(500).json({ message: "Failed to log scan" });
+      }
+    }
+  );
+
+  // Update prescription with dispensing details
+  app.patch(
+    "/api/prescriptions/:id/dispense",
+    isPharmacist,
+    async (req: any, res) => {
+      try {
+        const { id } = req.params;
+        const {
+          status,
+          pharmacistNotes,
+          substitutedMedications,
+          counselingNotes,
+          quantityDispensed,
+        } = req.body;
+        const userId = req.user.id;
+
+        // Get pharmacist record
+        const pharmacist = await db
+          .select()
+          .from(sql`pharmacists`)
+          .where(sql`user_id = ${userId}`)
+          .limit(1);
+
+        if (!pharmacist || pharmacist.length === 0) {
+          return res
+            .status(404)
+            .json({ message: "Pharmacist profile not found" });
+        }
+
+        const pharmacistId = pharmacist[0].id;
+
+        const updateData: any = {
+          pharmacistNotes,
+          status,
+        };
+
+        if (status === "dispensed") {
+          updateData.dispensedAt = new Date();
+          updateData.dispensedBy = pharmacistId;
+          updateData.substitutedMedications = substitutedMedications || null;
+          updateData.counselingNotes = counselingNotes || null;
+        }
+
+        await db
+          .update(prescriptions)
+          .set(updateData)
+          .where(eq(prescriptions.id, id));
+
+        res.json({
+          success: true,
+          message: "Prescription updated successfully",
+        });
+      } catch (error) {
+        console.error("Error dispensing prescription:", error);
+        res.status(500).json({ message: "Failed to dispense prescription" });
+      }
+    }
+  );
+
+  // Get pharmacist statistics
+  app.get(
+    "/api/prescriptions/pharmacist/stats",
+    isPharmacist,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+
+        // Get pharmacist record
+        const pharmacist = await db
+          .select()
+          .from(sql`pharmacists`)
+          .where(sql`user_id = ${userId}`)
+          .limit(1);
+
+        if (!pharmacist || pharmacist.length === 0) {
+          return res
+            .status(404)
+            .json({ message: "Pharmacist profile not found" });
+        }
+
+        const pharmacistId = pharmacist[0].id;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        // Scanned today - count prescriptions scanned by this pharmacist today
+        const scannedTodayResult = await db
+          .select({ count: count() })
+          .from(prescriptions)
+          .where(
+            and(
+              eq(prescriptions.lastScannedBy, pharmacistId),
+              gte(prescriptions.lastScannedAt, today)
+            )
+          );
+        const scannedToday = Number(scannedTodayResult[0]?.count || 0);
+
+        // Dispensed today - count prescriptions dispensed by this pharmacist today
+        const dispensedTodayResult = await db
+          .select({ count: count() })
+          .from(prescriptions)
+          .where(
+            and(
+              eq(prescriptions.dispensedBy, pharmacistId),
+              gte(prescriptions.dispensedAt, today)
+            )
+          );
+        const dispensedToday = Number(dispensedTodayResult[0]?.count || 0);
+
+        // Pending (issued status) - all pending prescriptions
+        const pendingResult = await db
+          .select({ count: count() })
+          .from(prescriptions)
+          .where(eq(prescriptions.status, "issued"));
+        const pending = Number(pendingResult[0]?.count || 0);
+
+        // Total completed by this pharmacist
+        const totalCompletedResult = await db
+          .select({ count: count() })
+          .from(prescriptions)
+          .where(
+            and(
+              eq(prescriptions.dispensedBy, pharmacistId),
+              eq(prescriptions.status, "dispensed")
+            )
+          );
+        const totalCompleted = Number(totalCompletedResult[0]?.count || 0);
+
+        res.json({
+          scannedToday,
+          dispensedToday,
+          pending,
+          totalCompleted,
+        });
+      } catch (error) {
+        console.error("Error fetching pharmacist stats:", error);
+        res.status(500).json({ message: "Failed to fetch statistics" });
+      }
+    }
+  );
+
+  // Get recent prescriptions for pharmacist
+  app.get(
+    "/api/prescriptions/pharmacist/recent",
+    isPharmacist,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+
+        // Get pharmacist record
+        const pharmacist = await db
+          .select()
+          .from(sql`pharmacists`)
+          .where(sql`user_id = ${userId}`)
+          .limit(1);
+
+        if (!pharmacist || pharmacist.length === 0) {
+          return res
+            .status(404)
+            .json({ message: "Pharmacist profile not found" });
+        }
+
+        const pharmacistId = pharmacist[0].id;
+
+        // Get recent scanned prescriptions
+        const recentPrescriptions = await db
+          .select({
+            id: prescriptions.id,
+            qrCode: prescriptions.qrCode,
+            status: prescriptions.status,
+            issuedDate: prescriptions.dateIssued,
+            expiryDate: prescriptions.expiryDate,
+            lastScannedAt: prescriptions.lastScannedAt,
+            dispensedAt: prescriptions.dispensedAt,
+            patientName: sql<string>`CONCAT(patient_user.first_name, ' ', patient_user.last_name)`,
+            doctorName: sql<string>`CONCAT(doctor_user.first_name, ' ', doctor_user.last_name)`,
+          })
+          .from(prescriptions)
+          .leftJoin(patients, eq(patients.id, prescriptions.patientId))
+          .leftJoin(
+            sql`users as patient_user`,
+            sql`patient_user.id = ${patients.userId}`
+          )
+          .leftJoin(doctors, eq(doctors.id, prescriptions.doctorId))
+          .leftJoin(
+            sql`users as doctor_user`,
+            sql`doctor_user.id = ${doctors.userId}`
+          )
+          .where(eq(prescriptions.lastScannedBy, pharmacistId))
+          .orderBy(sql`${prescriptions.lastScannedAt} DESC`)
+          .limit(10);
+
+        // Get medications for each prescription
+        const prescriptionsWithMeds = await Promise.all(
+          recentPrescriptions.map(async (prescription) => {
+            const items = await db
+              .select()
+              .from(prescriptionItems)
+              .where(eq(prescriptionItems.prescriptionId, prescription.id));
+
+            const medications = items.map((item: any) => ({
+              name: item.medicineName,
+              dosage: item.dosage,
+              frequency: item.frequency,
+              duration: item.duration,
+            }));
+
+            return {
+              ...prescription,
+              medications,
+            };
+          })
+        );
+
+        res.json(prescriptionsWithMeds);
+      } catch (error) {
+        console.error("Error fetching recent prescriptions:", error);
+        res
+          .status(500)
+          .json({ message: "Failed to fetch recent prescriptions" });
       }
     }
   );
