@@ -251,7 +251,8 @@ export default function PrescriptionDetailsDialog({
           </div>
 
           {/* Scan & Dispense Timestamps */}
-          {((prescription as any).lastScannedAt || (prescription as any).dispensedAt) && (
+          {((prescription as any).lastScannedAt ||
+            (prescription as any).dispensedAt) && (
             <div className="bg-muted/30 p-4 rounded-lg border border-border space-y-3">
               <Label className="text-sm font-medium text-muted-foreground">
                 Tracking Information
@@ -278,7 +279,10 @@ export default function PrescriptionDetailsDialog({
                       <span className="font-medium">Dispensed</span>
                     </div>
                     <p className="text-sm font-medium text-green-600 dark:text-green-400">
-                      {format(new Date((prescription as any).dispensedAt), "PPP 'at' p")}
+                      {format(
+                        new Date((prescription as any).dispensedAt),
+                        "PPP 'at' p"
+                      )}
                     </p>
                   </div>
                 )}

@@ -106,7 +106,9 @@ function PatientDashboard() {
   const [, navigate] = useLocation();
 
   // Fetch real data
-  const { data: appointments = [], isLoading: appointmentsLoading } = useQuery<any[]>({
+  const { data: appointments = [], isLoading: appointmentsLoading } = useQuery<
+    any[]
+  >({
     queryKey: ["/api/appointments"],
   });
 
@@ -119,7 +121,9 @@ function PatientDashboard() {
     queryKey: ["/api/lab-tests/patient"],
   });
 
-  const { data: medicalRecords = [], isLoading: recordsLoading } = useQuery<any[]>({
+  const { data: medicalRecords = [], isLoading: recordsLoading } = useQuery<
+    any[]
+  >({
     queryKey: ["/api/medical-records"],
   });
 
