@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -80,6 +80,7 @@ interface Prescription {
 export default function Prescriptions() {
   const { user, isLoading, isAuthenticated } = useAuth();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [selectedPrescription, setSelectedPrescription] =
     useState<Prescription | null>(null);
   const [isDetailDialogOpen, setIsDetailDialogOpen] = useState(false);
@@ -93,18 +94,68 @@ export default function Prescriptions() {
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [filterDoctor, setFilterDoctor] = useState<string>("all");
   const [dateRange, setDateRange] = useState<string>("all");
+  const [generatingQrForId, setGeneratingQrForId] = useState<string | null>(
+    null
+  );
 
   // Determine which endpoint to use based on role
   const endpoint =
     user?.role === "doctor"
       ? "/api/prescriptions/doctor/mine"
+      : user?.role === "pharmacist"
+      ? "/api/prescriptions/pharmacist/recent"
       : "/api/prescriptions";
 
   const { data: prescriptions = [], isLoading: loadingPrescriptions } =
     useQuery<Prescription[]>({
       queryKey: [endpoint],
       enabled: isAuthenticated && !!user,
+      select: (data: any) => {
+        if (!Array.isArray(data)) return [] as any;
+        if (user?.role !== "pharmacist") return data;
+
+        // The pharmacist endpoint returns `expiryDate` instead of `validUntil`.
+        return data.map((p: any) => ({
+          ...p,
+          validUntil: p.validUntil ?? p.expiryDate ?? null,
+        }));
+      },
     });
+
+  const generateQrCode = async (prescriptionId: string) => {
+    try {
+      setGeneratingQrForId(prescriptionId);
+      const response = await fetch(
+        `/api/prescriptions/${encodeURIComponent(prescriptionId)}/generate-qr`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || "Failed to generate QR code");
+      }
+
+      await response.json();
+      await queryClient.invalidateQueries({ queryKey: [endpoint] });
+
+      toast({
+        title: "QR Code Generated",
+        description: "You can now view and download the QR code.",
+      });
+    } catch (error: any) {
+      console.error("Generate QR error:", error);
+      toast({
+        title: "QR Generation Failed",
+        description: error?.message || "Please try again",
+        variant: "destructive",
+      });
+    } finally {
+      setGeneratingQrForId(null);
+    }
+  };
 
   // Debug: Log prescriptions data to check QR codes
   useEffect(() => {
@@ -198,6 +249,7 @@ export default function Prescriptions() {
   }
 
   const isDoctor = user.role === "doctor";
+  const isPharmacist = user.role === "pharmacist";
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
@@ -678,11 +730,17 @@ export default function Prescriptions() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">
-            {isDoctor ? "My Issued Prescriptions" : "My Prescriptions"}
+            {isDoctor
+              ? "My Issued Prescriptions"
+              : isPharmacist
+              ? "Scanned Prescriptions"
+              : "My Prescriptions"}
           </h1>
           <p className="text-muted-foreground mt-1">
             {isDoctor
               ? "View all prescriptions you've issued to patients"
+              : isPharmacist
+              ? "View prescriptions you've scanned (read-only)"
               : "View all your prescriptions with complete details - read-only access"}
           </p>
         </div>
@@ -820,6 +878,8 @@ export default function Prescriptions() {
               <p className="text-sm text-muted-foreground">
                 {isDoctor
                   ? "Prescriptions you issue will appear here"
+                  : isPharmacist
+                  ? "Prescriptions you scan will appear here"
                   : "Your prescriptions from doctors will appear here"}
               </p>
             </div>
@@ -874,13 +934,19 @@ export default function Prescriptions() {
                   <TableHead>Issued Date</TableHead>
                   <TableHead>Valid Until</TableHead>
                   <TableHead>Medicines</TableHead>
-                  {!isDoctor && <TableHead>QR Code</TableHead>}
-                  <TableHead>Actions</TableHead>
+                  {!isDoctor && !isPharmacist && <TableHead>QR Code</TableHead>}
+                  {!isPharmacist && <TableHead>Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredPrescriptions.map((prescription) => (
-                  <TableRow key={prescription.id}>
+                  <TableRow
+                    key={prescription.id}
+                    className={isPharmacist ? "cursor-pointer" : undefined}
+                    onClick={() => {
+                      if (isPharmacist) openDetailDialog(prescription);
+                    }}
+                  >
                     {isDoctor ? (
                       <>
                         <TableCell className="font-medium">
@@ -948,7 +1014,7 @@ export default function Prescriptions() {
                         {prescription.items?.length || 0} items
                       </Badge>
                     </TableCell>
-                    {!isDoctor && (
+                    {!isDoctor && !isPharmacist && (
                       <TableCell>
                         {prescription.qrCode ? (
                           <div className="flex items-center gap-2">
@@ -997,31 +1063,51 @@ export default function Prescriptions() {
                             </Button>
                           </div>
                         ) : (
-                          <div className="text-xs text-amber-600 dark:text-amber-400">
-                            <span>No QR Code</span>
+                          <div className="flex items-center gap-2">
+                            <div className="text-xs text-amber-600 dark:text-amber-400">
+                              <span>No QR Code</span>
+                            </div>
+                            {!isPharmacist && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2"
+                                disabled={generatingQrForId === prescription.id}
+                                onClick={() => generateQrCode(prescription.id)}
+                                title="Generate QR Code"
+                              >
+                                {generatingQrForId === prescription.id
+                                  ? "Generating..."
+                                  : "Generate"}
+                              </Button>
+                            )}
                           </div>
                         )}
                       </TableCell>
                     )}
-                    <TableCell>
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => openDetailDialog(prescription)}
-                        >
-                          <Eye className="h-4 w-4 mr-1" />
-                          View
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => downloadPrescriptionPDF(prescription)}
-                        >
-                          <Download className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
+                    {!isPharmacist && (
+                      <TableCell>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openDetailDialog(prescription)}
+                          >
+                            <Eye className="h-4 w-4 mr-1" />
+                            View
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() =>
+                              downloadPrescriptionPDF(prescription)
+                            }
+                          >
+                            <Download className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>
@@ -1351,8 +1437,8 @@ export default function Prescriptions() {
               {/* Read-Only Notice */}
               <div className="p-3 bg-muted rounded-lg border text-center">
                 <p className="text-xs text-muted-foreground">
-                   This is a read-only view. Patients cannot modify
-                  prescription details.
+                  This is a read-only view. Patients cannot modify prescription
+                  details.
                   {!isDoctor && " All changes must be made by your doctor."}
                 </p>
               </div>

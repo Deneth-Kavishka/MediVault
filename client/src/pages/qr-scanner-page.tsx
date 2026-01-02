@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Activity, Smartphone, Camera, Scan } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useQuery } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { QRScanner } from "@/components/qr-scanner";
 import { RemoteScannerPairing } from "@/components/remote-scanner-pairing";
 import PrescriptionDetailsDialog from "@/components/prescription-details-dialog";
@@ -21,6 +21,7 @@ export default function QRScannerPage() {
   const [selectedPrescription, setSelectedPrescription] = useState<any>(null);
   const [showPrescriptionDetails, setShowPrescriptionDetails] = useState(false);
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   const handleQRScan = async (qrCode: string) => {
     console.log("🔍 handleQRScan called with QR code:", qrCode);
@@ -253,6 +254,13 @@ export default function QRScannerPage() {
           onClose={() => {
             setShowPrescriptionDetails(false);
             setSelectedPrescription(null);
+            // Refresh prescription list after closing
+            queryClient.invalidateQueries({
+              queryKey: ["/api/prescriptions/pharmacist/recent"],
+            });
+            queryClient.invalidateQueries({
+              queryKey: ["/api/prescriptions/pharmacist/stats"],
+            });
           }}
           prescription={selectedPrescription}
         />

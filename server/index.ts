@@ -4,6 +4,9 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { getSession } from "./localAuth";
 import { DatabaseStorage } from "./storage";
+import { db } from "./db";
+import { prescriptions } from "@shared/schema";
+import { and, isNotNull, isNull, lt, ne } from "drizzle-orm";
 
 const app = express();
 
@@ -120,12 +123,53 @@ app.use((req, res, next) => {
     }
   }, 60 * 60 * 1000); // Run every hour
 
+  // Setup automatic prescription expiry persistence
+  // Runs on boot and then every hour.
+  const autoExpirePrescriptions = async () => {
+    try {
+      const now = new Date();
+      const updated = await db
+        .update(prescriptions)
+        .set({
+          status: "expired",
+          updatedAt: now,
+        })
+        .where(
+          and(
+            isNotNull(prescriptions.expiryDate),
+            lt(prescriptions.expiryDate, now),
+            // Never auto-expire prescriptions that were already processed
+            isNull(prescriptions.dispensedAt),
+            ne(prescriptions.status, "dispensed"),
+            ne(prescriptions.status, "cancelled"),
+            ne(prescriptions.status, "expired"),
+            ne(prescriptions.status, "not_dispensed")
+          )
+        )
+        .returning({ id: prescriptions.id });
+
+      if (updated.length > 0) {
+        log(`Auto-expired ${updated.length} prescription(s)`);
+      }
+    } catch (error) {
+      console.error("Error during prescription auto-expiry:", error);
+    }
+  };
+
+  await autoExpirePrescriptions();
+  const autoExpireInterval = setInterval(
+    autoExpirePrescriptions,
+    60 * 60 * 1000
+  );
+
   // Cleanup on shutdown
   process.on("SIGTERM", () => {
     clearInterval(cleanupInterval);
+    clearInterval(autoExpireInterval);
   });
   process.on("SIGINT", () => {
     clearInterval(cleanupInterval);
+    clearInterval(autoExpireInterval);
     process.exit(0);
   });
 })();

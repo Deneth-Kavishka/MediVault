@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -32,17 +32,40 @@ interface Medication {
   duration: string;
 }
 
+interface PrescriptionItem {
+  id: string;
+  medicineName: string;
+  dosage: string;
+  frequency: string;
+  duration: string;
+  dispensed?: boolean;
+}
+
 interface Prescription {
-  id: number;
+  id: number | string;
   qrCode: string;
   patientName: string;
   doctorName: string;
   issuedDate: string;
   expiryDate: string;
   medications: Medication[];
-  status: "issued" | "dispensed" | "expired" | "cancelled";
+  items?: PrescriptionItem[];
+  status:
+    | "issued"
+    | "active"
+    | "dispensed"
+    | "expired"
+    | "not_dispensed"
+    | "cancelled";
   diagnosis?: string;
   specialInstructions?: string;
+  lastScannedAt?: string;
+  dispensedAt?: string;
+  dispensedBy?: string;
+  dispensedByName?: string;
+  pharmacistNotes?: string;
+  substitutedMedications?: string;
+  counselingNotes?: string;
 }
 
 interface PrescriptionDetailsDialogProps {
@@ -63,18 +86,91 @@ export default function PrescriptionDetailsDialog({
   const [substitutedMedications, setSubstitutedMedications] = useState("");
   const [counselingNotes, setCounselingNotes] = useState("");
   const [quantityDispensed, setQuantityDispensed] = useState("");
+  const [itemDispenseState, setItemDispenseState] = useState<
+    Record<string, boolean>
+  >({});
+
+  useEffect(() => {
+    if (!open || !prescription) return;
+
+    setPharmacistNotes((prescription as any).pharmacistNotes || "");
+    setSubstitutedMedications(
+      (prescription as any).substitutedMedications || ""
+    );
+    setCounselingNotes((prescription as any).counselingNotes || "");
+
+    const nextItemState: Record<string, boolean> = {};
+    const items = Array.isArray((prescription as any).items)
+      ? ((prescription as any).items as PrescriptionItem[])
+      : [];
+    for (const item of items) {
+      if (item?.id) nextItemState[String(item.id)] = !!(item as any).dispensed;
+    }
+    setItemDispenseState(nextItemState);
+  }, [open, prescription?.id]);
 
   const dispenseMutation = useMutation({
     mutationFn: async (data: {
-      prescriptionId: number;
-      status: "dispensed" | "expired";
+      prescriptionId: number | string;
+      status: "dispensed" | "expired" | "not_dispensed";
       pharmacistNotes: string;
       substitutedMedications: string;
       counselingNotes: string;
       quantityDispensed: string;
     }) => {
+      const encodedId = encodeURIComponent(String(data.prescriptionId));
+      const response = await fetch(`/api/prescriptions/${encodedId}/dispense`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(data),
+      });
+
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        throw new Error(await response.text());
+      }
+
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/prescriptions"] });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/prescriptions/pharmacist/recent"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/prescriptions/pharmacist/stats"],
+      });
+      toast({
+        title: "Success",
+        description: "Prescription updated successfully",
+      });
+      handleClose();
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const dispenseItemsMutation = useMutation({
+    mutationFn: async (data: {
+      prescriptionId: number | string;
+      items: Array<{ id: string; dispensed: boolean }>;
+      pharmacistNotes?: string;
+      substitutedMedications?: string;
+      counselingNotes?: string;
+    }) => {
+      const encodedId = encodeURIComponent(String(data.prescriptionId));
       const response = await fetch(
-        `/api/prescriptions/${data.prescriptionId}/dispense`,
+        `/api/prescriptions/${encodedId}/dispense-items`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -87,13 +183,24 @@ export default function PrescriptionDetailsDialog({
         throw new Error(await response.text());
       }
 
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        throw new Error(await response.text());
+      }
+
       return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/prescriptions"] });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/prescriptions/pharmacist/recent"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/prescriptions/pharmacist/stats"],
+      });
       toast({
         title: "Success",
-        description: "Prescription updated successfully",
+        description: "Dispense details saved",
       });
       handleClose();
     },
@@ -153,18 +260,150 @@ export default function PrescriptionDetailsDialog({
     });
   };
 
+  const handleNotDispensedBecauseExpired = () => {
+    if (!prescription) return;
+
+    dispenseMutation.mutate({
+      prescriptionId: prescription.id,
+      status: "not_dispensed",
+      pharmacistNotes,
+      substitutedMedications: "",
+      counselingNotes: "",
+      quantityDispensed: "",
+    });
+  };
+
   const handleClose = () => {
     setPharmacistNotes("");
     setSubstitutedMedications("");
     setCounselingNotes("");
     setQuantityDispensed("");
+    setItemDispenseState({});
     onClose();
   };
 
   if (!prescription) return null;
 
-  const isExpired = isPast(new Date(prescription.expiryDate));
-  const canDispense = prescription.status === "issued" && !isExpired;
+  const isFinalized =
+    prescription.status === "dispensed" ||
+    prescription.status === "expired" ||
+    prescription.status === "not_dispensed" ||
+    prescription.status === "cancelled" ||
+    !!prescription.dispensedAt;
+
+  const isExpiredByDate = isPast(new Date(prescription.expiryDate));
+  // Only treat as expired-by-date if it hasn't already been finalized
+  const isExpired = isExpiredByDate && !isFinalized;
+  const isActiveLike =
+    prescription.status === "issued" || prescription.status === "active";
+  const canDispense = isActiveLike && !isExpired;
+  // Allow pharmacists to add notes for any prescription that hasn't been dispensed yet
+  const canUpdateStatus =
+    prescription.status !== "dispensed" &&
+    prescription.status !== "not_dispensed" &&
+    prescription.status !== "cancelled" &&
+    !prescription.dispensedAt;
+
+  const effectiveItems: PrescriptionItem[] =
+    Array.isArray((prescription as any).items) && (prescription as any).items
+      ? ((prescription as any).items as PrescriptionItem[])
+      : (prescription.medications || []).map((m, idx) => ({
+          id: `med-${idx}`,
+          medicineName: m.name,
+          dosage: m.dosage,
+          frequency: m.frequency,
+          duration: m.duration,
+          dispensed: false,
+        }));
+
+  const handleDonePerItem = () => {
+    const payloadItems = effectiveItems
+      .filter((i) => i.id && !String(i.id).startsWith("med-"))
+      .map((i) => ({
+        id: String(i.id),
+        dispensed: itemDispenseState[String(i.id)] ?? !!i.dispensed,
+      }));
+
+    const willAllBeDispensed =
+      payloadItems.length > 0 &&
+      payloadItems.every((i) => i.dispensed === true);
+
+    if (!willAllBeDispensed && !pharmacistNotes.trim()) {
+      toast({
+        title: "Notes Required",
+        description:
+          "Please add notes when one or more medicines are not dispensed (e.g., out of stock).",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (payloadItems.length === 0) {
+      toast({
+        title: "Cannot Save Item Status",
+        description:
+          "This prescription does not include item IDs. Please refresh and scan again.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    dispenseItemsMutation.mutate({
+      prescriptionId: prescription.id,
+      items: payloadItems,
+      pharmacistNotes: pharmacistNotes || undefined,
+      substitutedMedications: substitutedMedications || undefined,
+      counselingNotes: counselingNotes || undefined,
+    });
+  };
+
+  const handleNotDispensedPerItem = () => {
+    const payloadItems = effectiveItems
+      .filter((i) => i.id && !String(i.id).startsWith("med-"))
+      .map((i) => ({
+        id: String(i.id),
+        dispensed: itemDispenseState[String(i.id)] ?? !!i.dispensed,
+      }));
+
+    if (payloadItems.length === 0) {
+      toast({
+        title: "Cannot Save Item Status",
+        description:
+          "This prescription does not include item IDs. Please refresh and scan again.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const willAllBeDispensed = payloadItems.every((i) => i.dispensed === true);
+    if (willAllBeDispensed) {
+      toast({
+        title: "All Items Dispensed",
+        description:
+          "All medicines are marked as dispensed. Use 'Done' to complete, or uncheck missing items.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!pharmacistNotes.trim()) {
+      toast({
+        title: "Notes Required",
+        description:
+          "Please add notes for not dispensed medicines (e.g., out of stock).",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    dispenseItemsMutation.mutate({
+      prescriptionId: prescription.id,
+      items: payloadItems,
+      pharmacistNotes: pharmacistNotes || undefined,
+      substitutedMedications: substitutedMedications || undefined,
+      counselingNotes: counselingNotes || undefined,
+    });
+  };
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -186,6 +425,8 @@ export default function PrescriptionDetailsDialog({
                   ? "default"
                   : prescription.status === "expired"
                   ? "destructive"
+                  : prescription.status === "not_dispensed"
+                  ? "destructive"
                   : isExpired
                   ? "destructive"
                   : "secondary"
@@ -194,10 +435,14 @@ export default function PrescriptionDetailsDialog({
               {prescription.status === "dispensed" ? (
                 <CheckCircle className="h-3 w-3 mr-1" />
               ) : null}
-              {isExpired && prescription.status !== "expired" ? (
-                <AlertCircle className="h-3 w-3 mr-1" />
-              ) : null}
-              {isExpired && prescription.status !== "expired"
+              {isExpired ? <AlertCircle className="h-3 w-3 mr-1" /> : null}
+              {prescription.status === "dispensed"
+                ? "DISPENSED"
+                : prescription.status === "expired"
+                ? "EXPIRED"
+                : prescription.status === "not_dispensed"
+                ? "NOT DISPENSED"
+                : isExpired
                 ? "EXPIRED"
                 : prescription.status.toUpperCase()}
             </Badge>
@@ -235,17 +480,24 @@ export default function PrescriptionDetailsDialog({
             <div className="space-y-2">
               <Label
                 className={`text-muted-foreground flex items-center gap-1 ${
-                  isExpired ? "text-destructive" : ""
+                  isExpired || prescription.status === "expired"
+                    ? "text-destructive"
+                    : ""
                 }`}
               >
                 <Calendar className="h-4 w-4" />
                 Expiry Date
               </Label>
               <p
-                className={`font-medium ${isExpired ? "text-destructive" : ""}`}
+                className={`font-medium ${
+                  isExpired || prescription.status === "expired"
+                    ? "text-destructive"
+                    : ""
+                }`}
               >
                 {format(new Date(prescription.expiryDate), "PPP")}
-                {isExpired && " (Expired)"}
+                {(prescription.status === "expired" || isExpired) &&
+                  " (Expired)"}
               </p>
             </div>
           </div>
@@ -274,16 +526,54 @@ export default function PrescriptionDetailsDialog({
                 )}
                 {(prescription as any).dispensedAt && (
                   <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-xs text-green-600 dark:text-green-400">
+                    <div
+                      className={`flex items-center gap-2 text-xs ${
+                        prescription.status === "dispensed"
+                          ? "text-green-600 dark:text-green-400"
+                          : prescription.status === "not_dispensed" ||
+                            prescription.status === "expired"
+                          ? "text-destructive"
+                          : "text-muted-foreground"
+                      }`}
+                    >
                       <CheckCircle className="h-3.5 w-3.5" />
-                      <span className="font-medium">Dispensed</span>
+                      <span className="font-medium">
+                        {prescription.status === "dispensed"
+                          ? "Dispensed"
+                          : prescription.status === "not_dispensed"
+                          ? "Not Dispensed"
+                          : prescription.status === "expired"
+                          ? "Expired"
+                          : "Processed"}
+                      </span>
                     </div>
-                    <p className="text-sm font-medium text-green-600 dark:text-green-400">
+                    <p
+                      className={`text-sm font-medium ${
+                        prescription.status === "dispensed"
+                          ? "text-green-600 dark:text-green-400"
+                          : prescription.status === "not_dispensed" ||
+                            prescription.status === "expired"
+                          ? "text-destructive"
+                          : ""
+                      }`}
+                    >
                       {format(
                         new Date((prescription as any).dispensedAt),
                         "PPP 'at' p"
                       )}
                     </p>
+                    {((prescription as any).dispensedByName ||
+                      (prescription as any).dispensedBy) && (
+                      <p className="text-xs text-muted-foreground">
+                        By:{" "}
+                        {(prescription as any).dispensedByName || "Pharmacist"}
+                        {(prescription as any).dispensedByLicenseNumber
+                          ? ` (License No: ${
+                              (prescription as any).dispensedByLicenseNumber
+                            })`
+                          : ""}
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
@@ -309,25 +599,58 @@ export default function PrescriptionDetailsDialog({
               Medications
             </Label>
             <div className="space-y-2">
-              {prescription.medications.map((med, index) => (
-                <div key={index} className="border rounded-lg p-3 space-y-1">
-                  <p className="font-semibold">{med.name}</p>
-                  <div className="grid grid-cols-3 gap-2 text-sm text-muted-foreground">
-                    <p>
-                      Dosage:{" "}
-                      <span className="text-foreground">{med.dosage}</span>
-                    </p>
-                    <p>
-                      Frequency:{" "}
-                      <span className="text-foreground">{med.frequency}</span>
-                    </p>
-                    <p>
-                      Duration:{" "}
-                      <span className="text-foreground">{med.duration}</span>
-                    </p>
+              {effectiveItems.map((item, index) => {
+                const itemId = String(item.id || index);
+                const checked = itemDispenseState[itemId] ?? !!item.dispensed;
+
+                return (
+                  <div key={itemId} className="border rounded-lg p-3 space-y-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold">{item.medicineName}</p>
+                        <div className="grid grid-cols-3 gap-2 text-sm text-muted-foreground mt-1">
+                          <p>
+                            Dosage:{" "}
+                            <span className="text-foreground">
+                              {item.dosage}
+                            </span>
+                          </p>
+                          <p>
+                            Frequency:{" "}
+                            <span className="text-foreground">
+                              {item.frequency}
+                            </span>
+                          </p>
+                          <p>
+                            Duration:{" "}
+                            <span className="text-foreground">
+                              {item.duration}
+                            </span>
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-1">
+                        <span className="text-xs text-muted-foreground">
+                          Dispensed
+                        </span>
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4"
+                          checked={checked}
+                          disabled={prescription.status === "dispensed"}
+                          onChange={(e) =>
+                            setItemDispenseState((prev) => ({
+                              ...prev,
+                              [itemId]: e.target.checked,
+                            }))
+                          }
+                        />
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -343,10 +666,55 @@ export default function PrescriptionDetailsDialog({
             </div>
           )}
 
+          {/* Recorded Dispensing Details */}
+          {isFinalized &&
+            (((prescription as any).pharmacistNotes &&
+              String((prescription as any).pharmacistNotes).trim()) ||
+              ((prescription as any).substitutedMedications &&
+                String((prescription as any).substitutedMedications).trim()) ||
+              ((prescription as any).counselingNotes &&
+                String((prescription as any).counselingNotes).trim())) && (
+              <div className="space-y-3 bg-muted/30 p-4 rounded-lg border border-border">
+                <Label className="text-sm font-medium text-muted-foreground">
+                  Recorded Details
+                </Label>
+                {(prescription as any).pharmacistNotes && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">
+                      Pharmacist Notes
+                    </p>
+                    <p className="text-sm">
+                      {(prescription as any).pharmacistNotes}
+                    </p>
+                  </div>
+                )}
+                {(prescription as any).substitutedMedications && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">
+                      Substitutions
+                    </p>
+                    <p className="text-sm">
+                      {(prescription as any).substitutedMedications}
+                    </p>
+                  </div>
+                )}
+                {(prescription as any).counselingNotes && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">
+                      Counseling Notes
+                    </p>
+                    <p className="text-sm">
+                      {(prescription as any).counselingNotes}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
           <Separator />
 
-          {/* Pharmacist Notes Section - Only show if prescription can be processed */}
-          {(canDispense || prescription.status === "issued") && (
+          {/* Pharmacist Notes Section - Show for issued or expired prescriptions */}
+          {canUpdateStatus && (
             <div className="space-y-4 bg-gradient-to-br from-muted/30 to-muted/50 p-5 rounded-lg border border-border">
               <div className="flex items-center gap-2 mb-1">
                 <div className="h-8 w-1 bg-primary rounded-full"></div>
@@ -360,10 +728,15 @@ export default function PrescriptionDetailsDialog({
                     htmlFor="pharmacistNotes"
                     className="text-base font-medium"
                   >
-                    Pharmacist Notes <span className="text-destructive">*</span>
-                    <span className="text-xs text-muted-foreground font-normal ml-2">
-                      (Required for status update)
-                    </span>
+                    Pharmacist Notes
+                    {isExpired && (
+                      <>
+                        <span className="text-destructive"> *</span>
+                        <span className="text-xs text-muted-foreground font-normal ml-2">
+                          (Required only for "Dispense Out of Patient Request")
+                        </span>
+                      </>
+                    )}
                   </Label>
                   <Textarea
                     id="pharmacistNotes"
@@ -378,6 +751,40 @@ export default function PrescriptionDetailsDialog({
                     className="resize-none"
                   />
                 </div>
+
+                {/* Show update button for expired or past expiry date prescriptions */}
+                {isExpired &&
+                  prescription.status !== "dispensed" &&
+                  prescription.status !== "not_dispensed" &&
+                  prescription.status !== "cancelled" &&
+                  !prescription.dispensedAt && (
+                    <div className="pt-4 space-y-3">
+                      <Button
+                        variant="destructive"
+                        onClick={handleMarkExpired}
+                        disabled={
+                          dispenseMutation.isPending || !pharmacistNotes.trim()
+                        }
+                        className="w-full shadow-lg h-12"
+                      >
+                        <AlertCircle className="h-5 w-5 mr-2" />
+                        {dispenseMutation.isPending
+                          ? "Processing..."
+                          : "Update: Dispense Out of Patient Request"}
+                      </Button>
+
+                      <Button
+                        variant="outline"
+                        onClick={handleNotDispensedBecauseExpired}
+                        disabled={dispenseMutation.isPending}
+                        className="w-full shadow-lg h-12"
+                      >
+                        {dispenseMutation.isPending
+                          ? "Processing..."
+                          : "NOT DISPENCE BECAUSE OF THE EXPIRED"}
+                      </Button>
+                    </div>
+                  )}
 
                 {canDispense && (
                   <>
@@ -441,49 +848,64 @@ export default function PrescriptionDetailsDialog({
               onClick={handleClose}
               className="min-w-[100px]"
             >
-              Cancel
+              {prescription.status === "issued" ? "Cancel" : "Close"}
             </Button>
 
-            {prescription.status === "issued" && (
+            {isActiveLike && (
               <>
-                {!isExpired && (
-                  <Button
-                    onClick={handleDispense}
-                    disabled={
-                      dispenseMutation.isPending || !pharmacistNotes.trim()
-                    }
-                    className="bg-green-600 hover:bg-green-700 min-w-[160px] shadow-md"
-                  >
-                    <CheckCircle className="h-4 w-4 mr-2" />
-                    {dispenseMutation.isPending
-                      ? "Processing..."
-                      : "Mark as Dispensed"}
-                  </Button>
+                {!isExpired ? (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={handleNotDispensedPerItem}
+                      disabled={dispenseItemsMutation.isPending}
+                      className="min-w-[160px] shadow-md"
+                    >
+                      {dispenseItemsMutation.isPending
+                        ? "Saving..."
+                        : "Not Dispensed"}
+                    </Button>
+                    <Button
+                      onClick={handleDonePerItem}
+                      disabled={dispenseItemsMutation.isPending}
+                      className="bg-green-600 hover:bg-green-700 min-w-[160px] shadow-md"
+                    >
+                      <CheckCircle className="h-4 w-4 mr-2" />
+                      {dispenseItemsMutation.isPending ? "Saving..." : "Done"}
+                    </Button>
+                  </>
+                ) : (
+                  <div className="flex-1 text-sm text-destructive">
+                    ⚠️ Past expiry date - complete using buttons above
+                  </div>
                 )}
-
-                <Button
-                  variant="destructive"
-                  onClick={handleMarkExpired}
-                  disabled={
-                    dispenseMutation.isPending || !pharmacistNotes.trim()
-                  }
-                  className="min-w-[140px] shadow-md"
-                >
-                  <AlertCircle className="h-4 w-4 mr-2" />
-                  {dispenseMutation.isPending
-                    ? "Processing..."
-                    : "Mark as Expired"}
-                </Button>
               </>
             )}
-          </div>
 
-          {/* Note requirement reminder */}
-          {prescription.status === "issued" && !pharmacistNotes.trim() && (
-            <p className="text-sm text-amber-600 dark:text-amber-400 text-center -mt-2">
-              ⚠️ Pharmacist notes are required to update status
-            </p>
-          )}
+            {prescription.status === "expired" && (
+              <div className="flex-1 text-center py-2">
+                <p className="text-sm text-muted-foreground italic">
+                  Use the button above to update this prescription
+                </p>
+              </div>
+            )}
+
+            {prescription.status === "dispensed" && (
+              <div className="flex-1 text-center py-2">
+                <p className="text-sm text-green-600 dark:text-green-400 font-medium">
+                  ✓ This prescription has already been dispensed
+                </p>
+              </div>
+            )}
+
+            {prescription.status === "not_dispensed" && (
+              <div className="flex-1 text-center py-2">
+                <p className="text-sm text-muted-foreground italic">
+                  This prescription was finalized as not dispensed
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       </DialogContent>
     </Dialog>

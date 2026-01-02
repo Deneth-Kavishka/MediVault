@@ -361,6 +361,9 @@ export const prescriptionItems = pgTable("prescription_items", {
   duration: varchar("duration").notNull(),
   quantity: integer("quantity").notNull(),
   instructions: text("instructions"),
+  dispensed: boolean("dispensed").notNull().default(false),
+  dispensedAt: timestamp("dispensed_at"),
+  dispensedBy: varchar("dispensed_by").references(() => pharmacists.id),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

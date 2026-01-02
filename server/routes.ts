@@ -4,6 +4,7 @@ import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { format } from "date-fns";
+import { randomBytes } from "crypto";
 // Use local authentication
 import {
   setupAuth,
@@ -43,10 +44,11 @@ import {
   insertSystemSettingsSchema,
   medicalRecords,
   doctors,
+  pharmacists,
   users,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, sql, and, gte, count } from "drizzle-orm";
+import { eq, sql, and, gte, count, ne, isNull } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -658,6 +660,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           reactivationRequestedAt: new Date(),
           updatedAt: new Date(),
         });
+
+        if (!updated) {
+          return res
+            .status(500)
+            .json({ message: "Failed to request reactivation" });
+        }
 
         // Notify admins about reactivation request
         const admins = await storage.getAllUsers();
@@ -1386,6 +1394,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               dateIssued: new Date(),
               expiryDate: expiryDate,
               validityDays: validityDays,
+              qrCode: generatePrescriptionQrCode(),
               status: "active",
               notes: notes || "",
             })
@@ -2394,6 +2403,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
   // PRESCRIPTION ROUTES
   // ============================================================================
+  const generatePrescriptionQrCode = () => {
+    // Keep QR payload simple + URL-safe, and avoid collisions.
+    // Example: RX-1704067200000-9F3A1C2D4E5F
+    return `RX-${Date.now()}-${randomBytes(6).toString("hex").toUpperCase()}`;
+  };
+
   // Helper function to generate custom prescription ID
   const generatePrescriptionId = async () => {
     const now = new Date();
@@ -2424,13 +2439,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return `MV-PRES-${dateStr}-${sequence}`;
   };
 
+  const getEffectivePrescriptionStatus = (
+    status: string | null | undefined,
+    expiryDate: unknown,
+    dispensedAt: unknown
+  ) => {
+    const normalizedStatus = (status || "").toLowerCase();
+
+    // If already finalized, do not override
+    if (
+      normalizedStatus === "dispensed" ||
+      normalizedStatus === "cancelled" ||
+      normalizedStatus === "expired" ||
+      normalizedStatus === "not_dispensed"
+    ) {
+      return normalizedStatus || "issued";
+    }
+
+    // If already dispensed by timestamp, treat as dispensed
+    if (dispensedAt) return "dispensed";
+
+    if (!expiryDate) return normalizedStatus || "issued";
+
+    const expiry = new Date(expiryDate as any);
+    if (!Number.isFinite(expiry.getTime())) return normalizedStatus || "issued";
+
+    return expiry.getTime() < Date.now()
+      ? "expired"
+      : normalizedStatus || "issued";
+  };
+
   app.post("/api/prescriptions", isDoctorOrAdmin, async (req, res) => {
     try {
       const { items, ...prescriptionData } = req.body;
 
       // Generate custom prescription ID and QR code
       const customId = await generatePrescriptionId();
-      const qrCode = `RX-${Date.now()}`;
+      const qrCode = generatePrescriptionQrCode();
 
       const validatedPrescription = insertPrescriptionSchema.parse({
         ...prescriptionData,
@@ -2462,6 +2507,71 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .json({ message: error.message || "Failed to create prescription" });
     }
   });
+
+  // Fallback: generate QR code for an existing prescription (if missing)
+  app.post(
+    "/api/prescriptions/:id/generate-qr",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const prescriptionId = req.params.id;
+
+        const user = await storage.getUser(userId);
+        if (!user) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        const [prescription] = await db
+          .select({
+            id: prescriptions.id,
+            patientId: prescriptions.patientId,
+            doctorId: prescriptions.doctorId,
+            qrCode: prescriptions.qrCode,
+          })
+          .from(prescriptions)
+          .where(eq(prescriptions.id, prescriptionId));
+
+        if (!prescription) {
+          return res.status(404).json({ message: "Prescription not found" });
+        }
+
+        // Authorization: patient (own), doctor (own), admin
+        if (user.role === "patient") {
+          const patient = await storage.getPatientByUserId(userId);
+          if (!patient || patient.id !== prescription.patientId) {
+            return res.status(403).json({ message: "Forbidden" });
+          }
+        } else if (user.role === "doctor") {
+          const doctor = await storage.getDoctorByUserId(userId);
+          if (!doctor || doctor.id !== prescription.doctorId) {
+            return res.status(403).json({ message: "Forbidden" });
+          }
+        } else if (user.role !== "admin") {
+          return res.status(403).json({ message: "Forbidden" });
+        }
+
+        const existingQr = (prescription.qrCode || "").trim();
+        if (existingQr) {
+          return res.json({ id: prescription.id, qrCode: existingQr });
+        }
+
+        const newQrCode = generatePrescriptionQrCode();
+        const [updatedPrescription] = await db
+          .update(prescriptions)
+          .set({ qrCode: newQrCode, updatedAt: new Date() })
+          .where(eq(prescriptions.id, prescriptionId))
+          .returning({ id: prescriptions.id, qrCode: prescriptions.qrCode });
+
+        res.json(updatedPrescription);
+      } catch (error: any) {
+        console.error("Error generating prescription QR code:", error);
+        res.status(500).json({
+          message: error.message || "Failed to generate QR code",
+        });
+      }
+    }
+  );
 
   app.get("/api/prescriptions", isAuthenticated, async (req: any, res) => {
     try {
@@ -2500,6 +2610,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Map to add computed doctorName
           const patientPrescriptions = rawPrescriptions.map((record) => ({
             ...record,
+            status: getEffectivePrescriptionStatus(
+              record.status,
+              record.validUntil,
+              record.dispensedAt
+            ),
             doctorName:
               record.doctorFirstName && record.doctorLastName
                 ? `${record.doctorFirstName} ${record.doctorLastName}`
@@ -2598,6 +2713,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const { qrCode } = req.params;
         const userId = req.user.id;
 
+        // Get pharmacist ID from user ID (prescriptions.lastScannedBy references pharmacists.id)
+        const pharmacistResult = await db
+          .select()
+          .from(pharmacists)
+          .where(eq(pharmacists.userId, userId))
+          .limit(1);
+
+        if (!pharmacistResult || pharmacistResult.length === 0) {
+          return res
+            .status(404)
+            .json({ message: "Pharmacist profile not found" });
+        }
+
+        const pharmacistId = pharmacistResult[0].id;
+
         // Find prescription by QR code
         const prescription = await db
           .select()
@@ -2618,13 +2748,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .json({ message: "Prescription has been cancelled" });
         }
 
-        if (
-          prescriptionData.validUntil &&
-          new Date(prescriptionData.validUntil) < new Date()
-        ) {
-          return res.status(400).json({ message: "Prescription has expired" });
-        }
-
         // Update prescription with scan tracking
         const currentScanCount = prescriptionData.scannedCount || 0;
         const now = new Date();
@@ -2634,57 +2757,144 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .set({
             scannedCount: currentScanCount + 1,
             lastScannedAt: now,
-            lastScannedBy: userId,
-            // If first scan and status is active, mark as dispensed
-            status:
-              prescriptionData.status === "active"
-                ? "dispensed"
-                : prescriptionData.status,
-            dispensedAt: prescriptionData.dispensedAt || now,
-            dispensedBy: prescriptionData.dispensedBy || userId,
+            lastScannedBy: pharmacistId,
           })
           .where(eq(prescriptions.id, prescriptionData.id));
 
-        // Get updated prescription with details
-        const updatedPrescription = await db
-          .select({
-            id: sql`${prescriptions}.id`,
-            patientId: sql`${prescriptions}.patient_id`,
-            status: sql`${prescriptions}.status`,
-            issuedDate: sql`${prescriptions}.issued_date`,
-            validUntil: sql`${prescriptions}.valid_until`,
-            notes: sql`${prescriptions}.notes`,
-            qrCode: sql`${prescriptions}.qr_code`,
-            scannedCount: sql`${prescriptions}.scanned_count`,
-            lastScannedAt: sql`${prescriptions}.last_scanned_at`,
-            dispensedAt: sql`${prescriptions}.dispensed_at`,
-            patientName: sql`CONCAT(${sql.identifier(
-              "users"
-            )}.first_name, ' ', ${sql.identifier("users")}.last_name)`,
-            patientHealthId: sql`${patients}.health_id`,
-          })
-          .from(prescriptions)
-          .leftJoin(patients, eq(patients.id, prescriptions.patientId))
-          .leftJoin(
-            sql.identifier("users"),
-            sql`${sql.identifier("users")}.id = ${patients}.user_id`
-          )
-          .where(eq(prescriptions.id, prescriptionData.id))
+        // Send notification to patient about prescription scan
+        if (prescriptionData.patientId) {
+          const patientRecord = await db
+            .select()
+            .from(patients)
+            .where(eq(patients.id, prescriptionData.patientId))
+            .limit(1);
+
+          if (patientRecord && patientRecord.length > 0) {
+            const patientUserId = patientRecord[0].userId;
+            const pharmacistUser = await db
+              .select()
+              .from(users)
+              .where(eq(users.id, userId))
+              .limit(1);
+
+            const pharmacistName =
+              pharmacistUser.length > 0
+                ? `${pharmacistUser[0].firstName} ${pharmacistUser[0].lastName}`
+                : "Pharmacist";
+
+            await storage.createNotification({
+              recipientId: patientUserId,
+              type: "prescription",
+              title: "Prescription Scanned",
+              message: `Your prescription (${prescriptionData.id}) has been scanned by ${pharmacistName} at the pharmacy.`,
+              relatedEntityId: prescriptionData.id,
+            });
+          }
+        }
+
+        // Return the same response shape as the GET scan endpoint
+        const patientData = await db
+          .select()
+          .from(patients)
+          .where(eq(patients.id, prescriptionData.patientId))
           .limit(1);
 
-        // Get prescription items
+        let patientName = "Unknown Patient";
+        if (patientData && patientData.length > 0) {
+          const patientUser = await db
+            .select()
+            .from(users)
+            .where(eq(users.id, patientData[0].userId))
+            .limit(1);
+          if (patientUser && patientUser.length > 0) {
+            patientName = `${patientUser[0].firstName || ""} ${
+              patientUser[0].lastName || ""
+            }`.trim();
+          }
+        }
+
+        const doctorData = await db
+          .select()
+          .from(doctors)
+          .where(eq(doctors.id, prescriptionData.doctorId))
+          .limit(1);
+
+        let doctorName = "Unknown Doctor";
+        if (doctorData && doctorData.length > 0) {
+          const doctorUser = await db
+            .select()
+            .from(users)
+            .where(eq(users.id, doctorData[0].userId))
+            .limit(1);
+          if (doctorUser && doctorUser.length > 0) {
+            doctorName = `${doctorUser[0].firstName || ""} ${
+              doctorUser[0].lastName || ""
+            }`.trim();
+          }
+        }
+
         const items = await db
           .select()
           .from(prescriptionItems)
           .where(eq(prescriptionItems.prescriptionId, prescriptionData.id));
 
+        const medications = items.map((item: any) => ({
+          name: item.medicineName,
+          dosage: item.dosage,
+          frequency: item.frequency,
+          duration: item.duration,
+        }));
+
+        // Resolve dispensed pharmacist name (if already dispensed)
+        let dispensedByName: string | null = null;
+        let dispensedByLicenseNumber: string | null = null;
+        if (prescriptionData.dispensedBy) {
+          const dispPharmacist = await db
+            .select()
+            .from(pharmacists)
+            .where(eq(pharmacists.id, prescriptionData.dispensedBy))
+            .limit(1);
+
+          if (dispPharmacist && dispPharmacist.length > 0) {
+            dispensedByLicenseNumber = dispPharmacist[0].licenseNumber ?? null;
+            const dispUser = await db
+              .select()
+              .from(users)
+              .where(eq(users.id, dispPharmacist[0].userId))
+              .limit(1);
+            if (dispUser && dispUser.length > 0) {
+              dispensedByName = `${dispUser[0].firstName || ""} ${
+                dispUser[0].lastName || ""
+              }`.trim();
+            }
+          }
+        }
+
         res.json({
-          ...updatedPrescription[0],
+          id: prescriptionData.id,
+          qrCode: prescriptionData.qrCode,
+          patientName,
+          doctorName,
+          issuedDate: prescriptionData.dateIssued,
+          expiryDate: prescriptionData.expiryDate,
+          status: getEffectivePrescriptionStatus(
+            prescriptionData.status,
+            prescriptionData.expiryDate,
+            prescriptionData.dispensedAt
+          ),
+          diagnosis: prescriptionData.diagnosis,
+          specialInstructions: prescriptionData.specialInstructions,
+          medications,
           items,
-          message:
-            currentScanCount === 0
-              ? "Prescription dispensed successfully"
-              : "Prescription scanned",
+          pharmacistNotes: prescriptionData.pharmacistNotes,
+          substitutedMedications: prescriptionData.substitutedMedications,
+          counselingNotes: prescriptionData.counselingNotes,
+          lastScannedAt: now,
+          dispensedAt: prescriptionData.dispensedAt,
+          dispensedBy: prescriptionData.dispensedBy,
+          dispensedByName,
+          dispensedByLicenseNumber,
+          message: "Prescription scanned",
         });
       } catch (error) {
         console.error("Error scanning prescription:", error);
@@ -2700,6 +2910,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req: any, res) => {
       try {
         const { qrCode } = req.params;
+        const userId = req.user.id;
         console.log(
           "🔍 NEW CODE RUNNING: Fetching prescription with QR code:",
           qrCode
@@ -2717,6 +2928,103 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         const prescriptionData = result[0];
+
+        let updatedLastScannedAt = prescriptionData.lastScannedAt;
+        let updatedLastScannedBy = prescriptionData.lastScannedBy;
+
+        console.log("🔍 Looking up pharmacist for user ID:", userId);
+
+        // Get pharmacist ID from user ID
+        const pharmacistResult = await db
+          .select()
+          .from(pharmacists)
+          .where(eq(pharmacists.userId, userId))
+          .limit(1);
+
+        console.log("📋 Pharmacist lookup result:", {
+          found: pharmacistResult && pharmacistResult.length > 0,
+          count: pharmacistResult?.length,
+          data:
+            pharmacistResult && pharmacistResult.length > 0
+              ? pharmacistResult[0]
+              : null,
+        });
+
+        if (pharmacistResult && pharmacistResult.length > 0) {
+          const pharmacistId = pharmacistResult[0].id;
+          const currentScanCount = prescriptionData.scannedCount || 0;
+          const now = new Date();
+
+          console.log("📝 Updating scan tracking:", {
+            prescriptionId: prescriptionData.id,
+            prescriptionIdType: typeof prescriptionData.id,
+            pharmacistId,
+            pharmacistIdType: typeof pharmacistId,
+            currentScanCount,
+            newScanCount: currentScanCount + 1,
+          });
+
+          // Update scan tracking using the correct where clause
+          const updateResult = await db
+            .update(prescriptions)
+            .set({
+              scannedCount: currentScanCount + 1,
+              lastScannedAt: now,
+              lastScannedBy: pharmacistId,
+            })
+            .where(eq(prescriptions.id, prescriptionData.id))
+            .returning();
+
+          console.log(
+            "✅ Scan tracking updated successfully, rows affected:",
+            updateResult.length
+          );
+          console.log("📋 Updated prescription data:", {
+            id: updateResult[0]?.id,
+            lastScannedBy: updateResult[0]?.lastScannedBy,
+            lastScannedAt: updateResult[0]?.lastScannedAt,
+          });
+
+          updatedLastScannedAt = updateResult[0]?.lastScannedAt ?? now;
+          updatedLastScannedBy = updateResult[0]?.lastScannedBy ?? pharmacistId;
+
+          // Send notification to patient about prescription scan
+          if (prescriptionData.patientId) {
+            const patientRecord = await db
+              .select()
+              .from(patients)
+              .where(eq(patients.id, prescriptionData.patientId))
+              .limit(1);
+
+            if (patientRecord && patientRecord.length > 0) {
+              const patientUserId = patientRecord[0].userId;
+
+              // Get pharmacist name for notification
+              const pharmacistUser = await db
+                .select()
+                .from(users)
+                .where(eq(users.id, userId))
+                .limit(1);
+
+              const pharmacistName =
+                pharmacistUser.length > 0
+                  ? `${pharmacistUser[0].firstName} ${pharmacistUser[0].lastName}`
+                  : "Pharmacist";
+
+              await storage.createNotification({
+                recipientId: patientUserId,
+                type: "prescription",
+                title: "Prescription Scanned",
+                message: `Your prescription (${prescriptionData.id}) has been scanned by ${pharmacistName} at the pharmacy.`,
+                relatedEntityId: prescriptionData.id,
+              });
+
+              console.log("✅ Notification sent to patient:", patientUserId);
+            }
+          }
+        } else {
+          console.warn("⚠️ Pharmacist not found for user:", userId);
+        }
 
         // Get patient info
         const patientData = await db
@@ -2774,6 +3082,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
           duration: item.duration,
         }));
 
+        // Resolve dispensed pharmacist name (if already dispensed)
+        let dispensedByName: string | null = null;
+        let dispensedByLicenseNumber: string | null = null;
+        if (prescriptionData.dispensedBy) {
+          const dispPharmacist = await db
+            .select()
+            .from(pharmacists)
+            .where(eq(pharmacists.id, prescriptionData.dispensedBy))
+            .limit(1);
+
+          if (dispPharmacist && dispPharmacist.length > 0) {
+            dispensedByLicenseNumber = dispPharmacist[0].licenseNumber ?? null;
+            const dispUser = await db
+              .select()
+              .from(users)
+              .where(eq(users.id, dispPharmacist[0].userId))
+              .limit(1);
+            if (dispUser && dispUser.length > 0) {
+              dispensedByName = `${dispUser[0].firstName || ""} ${
+                dispUser[0].lastName || ""
+              }`.trim();
+            }
+          }
+        }
+
         const response = {
           id: prescriptionData.id,
           qrCode: prescriptionData.qrCode,
@@ -2785,9 +3118,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           diagnosis: prescriptionData.diagnosis,
           specialInstructions: prescriptionData.specialInstructions,
           medications,
+          items,
           pharmacistNotes: prescriptionData.pharmacistNotes,
           substitutedMedications: prescriptionData.substitutedMedications,
           counselingNotes: prescriptionData.counselingNotes,
+          lastScannedAt: updatedLastScannedAt,
+          lastScannedBy: updatedLastScannedBy,
+          dispensedAt: prescriptionData.dispensedAt,
+          dispensedBy: prescriptionData.dispensedBy,
+          dispensedByName,
+          dispensedByLicenseNumber,
         };
 
         res.json(response);
@@ -2810,8 +3150,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Get pharmacist record
         const pharmacist = await db
           .select()
-          .from(sql`pharmacists`)
-          .where(sql`user_id = ${userId}`)
+          .from(pharmacists)
+          .where(eq(pharmacists.userId, userId))
           .limit(1);
 
         if (!pharmacist || pharmacist.length === 0) {
@@ -2851,6 +3191,211 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   );
 
+  // Mark dispense status per prescription item, then finalize prescription
+  app.patch(
+    "/api/prescriptions/:id/dispense-items",
+    isPharmacist,
+    async (req: any, res) => {
+      try {
+        const prescriptionId = req.params.id;
+        const userId = req.user.id;
+
+        const {
+          items,
+          pharmacistNotes,
+          substitutedMedications,
+          counselingNotes,
+        } = req.body || {};
+
+        if (!Array.isArray(items) || items.length === 0) {
+          return res.status(400).json({ message: "Items are required" });
+        }
+
+        // Get pharmacist
+        const pharmacistResult = await db
+          .select()
+          .from(pharmacists)
+          .where(eq(pharmacists.userId, userId))
+          .limit(1);
+
+        if (!pharmacistResult || pharmacistResult.length === 0) {
+          return res
+            .status(404)
+            .json({ message: "Pharmacist profile not found" });
+        }
+
+        const pharmacistId = pharmacistResult[0].id;
+        const pharmacistLicenseNumber =
+          pharmacistResult[0].licenseNumber ?? null;
+
+        // Load prescription
+        const [prescription] = await db
+          .select({
+            id: prescriptions.id,
+            patientId: prescriptions.patientId,
+            status: prescriptions.status,
+            expiryDate: prescriptions.expiryDate,
+          })
+          .from(prescriptions)
+          .where(eq(prescriptions.id, prescriptionId));
+
+        if (!prescription) {
+          return res.status(404).json({ message: "Prescription not found" });
+        }
+
+        if (prescription.status === "cancelled") {
+          return res
+            .status(400)
+            .json({ message: "Prescription has been cancelled" });
+        }
+
+        // Past-expiry prescriptions must be marked as expired (with notes)
+        const effectiveStatus = getEffectivePrescriptionStatus(
+          prescription.status,
+          prescription.expiryDate,
+          null
+        );
+        if (
+          effectiveStatus === "expired" &&
+          prescription.status !== "expired"
+        ) {
+          return res.status(400).json({
+            message:
+              "Prescription is past its expiry date. Please mark it as expired with notes.",
+          });
+        }
+
+        const now = new Date();
+
+        // Update each item (only if it belongs to this prescription)
+        for (const item of items) {
+          if (!item?.id || typeof item.dispensed !== "boolean") continue;
+
+          const isDispensed = item.dispensed === true;
+
+          await db
+            .update(prescriptionItems)
+            .set({
+              dispensed: isDispensed,
+              dispensedAt: isDispensed ? now : null,
+              dispensedBy: isDispensed ? pharmacistId : null,
+            })
+            .where(
+              and(
+                eq(prescriptionItems.id, String(item.id)),
+                eq(prescriptionItems.prescriptionId, prescriptionId)
+              )
+            );
+        }
+
+        // Determine final status
+        const updatedItems = await db
+          .select()
+          .from(prescriptionItems)
+          .where(eq(prescriptionItems.prescriptionId, prescriptionId));
+
+        const allDispensed =
+          updatedItems.length > 0 &&
+          updatedItems.every((i: any) => i.dispensed);
+
+        const finalStatus = allDispensed ? "dispensed" : "not_dispensed";
+
+        if (
+          finalStatus === "not_dispensed" &&
+          !String(pharmacistNotes || "").trim()
+        ) {
+          return res.status(400).json({
+            message:
+              "Notes are required when one or more medicines are not dispensed (e.g., out of stock).",
+          });
+        }
+
+        // Finalize prescription as processed/dispensed
+        await db
+          .update(prescriptions)
+          .set({
+            status: finalStatus,
+            dispensedAt: now,
+            dispensedBy: pharmacistId,
+            pharmacistNotes: pharmacistNotes || null,
+            substitutedMedications: substitutedMedications || null,
+            counselingNotes: counselingNotes || null,
+            updatedAt: now,
+          })
+          .where(eq(prescriptions.id, prescriptionId));
+
+        // Notify patient
+        if (prescription.patientId) {
+          const patientRecord = await db
+            .select()
+            .from(patients)
+            .where(eq(patients.id, prescription.patientId))
+            .limit(1);
+
+          if (patientRecord && patientRecord.length > 0) {
+            const patientUserId = patientRecord[0].userId;
+
+            const pharmacistUser = await db
+              .select()
+              .from(users)
+              .where(eq(users.id, userId))
+              .limit(1);
+
+            const pharmacistName =
+              pharmacistUser.length > 0
+                ? `${pharmacistUser[0].firstName} ${pharmacistUser[0].lastName}`
+                : "Pharmacist";
+
+            await storage.createNotification({
+              recipientId: patientUserId,
+              type: "prescription",
+              title:
+                finalStatus === "dispensed"
+                  ? "Prescription Dispensed"
+                  : "Prescription Not Dispensed",
+              message:
+                finalStatus === "dispensed"
+                  ? `Your prescription (${prescriptionId}) has been processed by ${pharmacistName}.`
+                  : `Your prescription (${prescriptionId}) could not be dispensed by ${pharmacistName}. ${
+                      pharmacistNotes ? `Reason: ${pharmacistNotes}` : ""
+                    }`,
+              relatedEntityId: prescriptionId,
+            });
+          }
+        }
+
+        // Return updated items + dispense info (including pharmacist name)
+        const pharmacistUser = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+
+        const dispensedByName =
+          pharmacistUser.length > 0
+            ? `${pharmacistUser[0].firstName || ""} ${
+                pharmacistUser[0].lastName || ""
+              }`.trim()
+            : null;
+
+        res.json({
+          success: true,
+          status: finalStatus,
+          dispensedAt: now,
+          dispensedBy: pharmacistId,
+          dispensedByName,
+          dispensedByLicenseNumber: pharmacistLicenseNumber,
+          items: updatedItems,
+        });
+      } catch (error) {
+        console.error("Error dispensing prescription items:", error);
+        res
+          .status(500)
+          .json({ message: "Failed to dispense prescription items" });
+      }
+    }
+  );
+
   // Update prescription with dispensing details
   app.patch(
     "/api/prescriptions/:id/dispense",
@@ -2867,11 +3412,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } = req.body;
         const userId = req.user.id;
 
+        console.log("🔄 Updating prescription:", {
+          id,
+          status,
+          pharmacistNotes,
+        });
+
         // Get pharmacist record
         const pharmacist = await db
           .select()
-          .from(sql`pharmacists`)
-          .where(sql`user_id = ${userId}`)
+          .from(pharmacists)
+          .where(eq(pharmacists.userId, userId))
           .limit(1);
 
         if (!pharmacist || pharmacist.length === 0) {
@@ -2892,12 +3443,96 @@ export async function registerRoutes(app: Express): Promise<Server> {
           updateData.dispensedBy = pharmacistId;
           updateData.substitutedMedications = substitutedMedications || null;
           updateData.counselingNotes = counselingNotes || null;
+          updateData.quantityDispensed = quantityDispensed || null;
+        } else if (status === "expired") {
+          updateData.dispensedAt = new Date();
+          updateData.dispensedBy = pharmacistId;
+        } else if (status === "not_dispensed") {
+          updateData.dispensedAt = new Date();
+          updateData.dispensedBy = pharmacistId;
+          updateData.substitutedMedications = substitutedMedications || null;
+          updateData.counselingNotes = counselingNotes || null;
+          updateData.quantityDispensed = quantityDispensed || null;
         }
 
-        await db
+        // Handle both numeric ID and string ID (like "MV-PRES-17/12/25-001")
+        const whereClause = isNaN(Number(id))
+          ? eq(prescriptions.id, id)
+          : eq(prescriptions.id, parseInt(id));
+
+        const result = await db
           .update(prescriptions)
           .set(updateData)
-          .where(eq(prescriptions.id, id));
+          .where(whereClause)
+          .returning();
+
+        console.log("✅ Prescription updated successfully");
+
+        // Send notification to patient about prescription status change
+        if (result && result.length > 0) {
+          const prescription = result[0];
+
+          // Get patient user ID
+          const patientRecord = await db
+            .select()
+            .from(patients)
+            .where(eq(patients.id, prescription.patientId))
+            .limit(1);
+
+          if (patientRecord && patientRecord.length > 0) {
+            const patientUserId = patientRecord[0].userId;
+
+            // Get pharmacist name
+            const pharmacistUser = await db
+              .select()
+              .from(users)
+              .where(eq(users.id, userId))
+              .limit(1);
+
+            const pharmacistName =
+              pharmacistUser.length > 0
+                ? `${pharmacistUser[0].firstName} ${pharmacistUser[0].lastName}`
+                : "Pharmacist";
+
+            let notificationTitle = "";
+            let notificationMessage = "";
+
+            if (status === "dispensed") {
+              notificationTitle = "Prescription Dispensed";
+              notificationMessage = `Your prescription (${
+                prescription.id
+              }) has been dispensed by ${pharmacistName}. ${
+                pharmacistNotes ? "Note: " + pharmacistNotes : ""
+              }`;
+            } else if (status === "expired") {
+              notificationTitle = "Prescription Status Updated";
+              notificationMessage = `Your prescription (${
+                prescription.id
+              }) has been marked as expired. ${
+                pharmacistNotes ? "Reason: " + pharmacistNotes : ""
+              }`;
+            } else if (status === "not_dispensed") {
+              notificationTitle = "Prescription Not Dispensed";
+              notificationMessage = `Your prescription (${
+                prescription.id
+              }) could not be dispensed by ${pharmacistName}. ${
+                pharmacistNotes ? "Reason: " + pharmacistNotes : ""
+              }`;
+            }
+
+            if (notificationTitle) {
+              await storage.createNotification({
+                recipientId: patientUserId,
+                type: "prescription",
+                title: notificationTitle,
+                message: notificationMessage,
+                relatedEntityId: prescription.id,
+              });
+
+              console.log("✅ Notification sent to patient:", patientUserId);
+            }
+          }
+        }
 
         res.json({
           success: true,
@@ -2921,8 +3556,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Get pharmacist record
         const pharmacist = await db
           .select()
-          .from(sql`pharmacists`)
-          .where(sql`user_id = ${userId}`)
+          .from(pharmacists)
+          .where(eq(pharmacists.userId, userId))
           .limit(1);
 
         if (!pharmacist || pharmacist.length === 0) {
@@ -2942,28 +3577,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .where(
             and(
               eq(prescriptions.lastScannedBy, pharmacistId),
-              gte(prescriptions.lastScannedAt, today)
+              gte(prescriptions.lastScannedAt, today),
+              // Exclude scans performed after the prescription was already expired
+              sql`(${prescriptions.expiryDate} IS NULL OR ${prescriptions.expiryDate} >= ${prescriptions.lastScannedAt})`
             )
           );
         const scannedToday = Number(scannedTodayResult[0]?.count || 0);
 
-        // Dispensed today - count prescriptions dispensed by this pharmacist today
+        // Dispensed today - count prescriptions actually dispensed by this pharmacist today
         const dispensedTodayResult = await db
           .select({ count: count() })
           .from(prescriptions)
           .where(
             and(
               eq(prescriptions.dispensedBy, pharmacistId),
-              gte(prescriptions.dispensedAt, today)
+              gte(prescriptions.dispensedAt, today),
+              eq(prescriptions.status, "dispensed")
             )
           );
         const dispensedToday = Number(dispensedTodayResult[0]?.count || 0);
 
-        // Pending (issued status) - all pending prescriptions
+        // Not dispensed today - completed as not_dispensed by this pharmacist today
+        const notDispensedTodayResult = await db
+          .select({ count: count() })
+          .from(prescriptions)
+          .where(
+            and(
+              eq(prescriptions.dispensedBy, pharmacistId),
+              gte(prescriptions.dispensedAt, today),
+              eq(prescriptions.status, "not_dispensed")
+            )
+          );
+        const notDispensedToday = Number(
+          notDispensedTodayResult[0]?.count || 0
+        );
+
+        // Processed today - any completed outcome today (dispensed / expired / not_dispensed)
+        const processedTodayResult = await db
+          .select({ count: count() })
+          .from(prescriptions)
+          .where(
+            and(
+              eq(prescriptions.dispensedBy, pharmacistId),
+              gte(prescriptions.dispensedAt, today),
+              sql`(${prescriptions.status} IN ('dispensed', 'expired', 'not_dispensed'))`
+            )
+          );
+        const processedToday = Number(processedTodayResult[0]?.count || 0);
+
+        // Pending - scanned by this pharmacist and not finalized yet
+        // Note: prescriptions can become expired automatically by date; we still treat them as pending
+        // until the pharmacist completes an action (which sets dispensedAt).
         const pendingResult = await db
           .select({ count: count() })
           .from(prescriptions)
-          .where(eq(prescriptions.status, "issued"));
+          .where(
+            and(
+              eq(prescriptions.lastScannedBy, pharmacistId),
+              isNull(prescriptions.dispensedAt),
+              ne(prescriptions.status, "cancelled")
+            )
+          );
         const pending = Number(pendingResult[0]?.count || 0);
 
         // Total completed by this pharmacist
@@ -2973,7 +3647,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .where(
             and(
               eq(prescriptions.dispensedBy, pharmacistId),
-              eq(prescriptions.status, "dispensed")
+              sql`(${prescriptions.status} IN ('dispensed', 'expired', 'not_dispensed'))`
             )
           );
         const totalCompleted = Number(totalCompletedResult[0]?.count || 0);
@@ -2981,6 +3655,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.json({
           scannedToday,
           dispensedToday,
+          notDispensedToday,
+          processedToday,
           pending,
           totalCompleted,
         });
@@ -3002,8 +3678,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Get pharmacist record
         const pharmacist = await db
           .select()
-          .from(sql`pharmacists`)
-          .where(sql`user_id = ${userId}`)
+          .from(pharmacists)
+          .where(eq(pharmacists.userId, userId))
           .limit(1);
 
         if (!pharmacist || pharmacist.length === 0) {
@@ -3014,6 +3690,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         const pharmacistId = pharmacist[0].id;
 
+        console.log(
+          "📋 Fetching recent prescriptions for pharmacist:",
+          pharmacistId
+        );
+
+        // First, let's check if there are ANY prescriptions with lastScannedBy set
+        const allScannedPrescriptions = await db
+          .select({
+            id: prescriptions.id,
+            lastScannedBy: prescriptions.lastScannedBy,
+            lastScannedAt: prescriptions.lastScannedAt,
+          })
+          .from(prescriptions)
+          .where(sql`${prescriptions.lastScannedBy} IS NOT NULL`)
+          .limit(5);
+
+        console.log(
+          "🔍 All prescriptions with scans:",
+          allScannedPrescriptions
+        );
+
         // Get recent scanned prescriptions
         const recentPrescriptions = await db
           .select({
@@ -3022,8 +3719,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
             status: prescriptions.status,
             issuedDate: prescriptions.dateIssued,
             expiryDate: prescriptions.expiryDate,
+            scannedCount: prescriptions.scannedCount,
             lastScannedAt: prescriptions.lastScannedAt,
+            lastScannedBy: prescriptions.lastScannedBy,
             dispensedAt: prescriptions.dispensedAt,
+            dispensedBy: prescriptions.dispensedBy,
+            pharmacistNotes: prescriptions.pharmacistNotes,
+            substitutedMedications: prescriptions.substitutedMedications,
+            counselingNotes: prescriptions.counselingNotes,
+            notes: prescriptions.notes,
             patientName: sql<string>`CONCAT(patient_user.first_name, ' ', patient_user.last_name)`,
             doctorName: sql<string>`CONCAT(doctor_user.first_name, ' ', doctor_user.last_name)`,
           })
@@ -3042,6 +3746,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .orderBy(sql`${prescriptions.lastScannedAt} DESC`)
           .limit(10);
 
+        console.log(
+          "📊 Found prescriptions for this pharmacist:",
+          recentPrescriptions.length
+        );
+        console.log(
+          "📝 Sample prescription IDs:",
+          recentPrescriptions.slice(0, 3).map((p) => ({
+            id: p.id,
+            qrCode: p.qrCode,
+            lastScannedBy: p.lastScannedBy,
+            lastScannedAt: p.lastScannedAt,
+          }))
+        );
+
         // Get medications for each prescription
         const prescriptionsWithMeds = await Promise.all(
           recentPrescriptions.map(async (prescription) => {
@@ -3057,9 +3775,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
               duration: item.duration,
             }));
 
+            let dispensedByName: string | null = null;
+            let dispensedByLicenseNumber: string | null = null;
+            if ((prescription as any).dispensedBy) {
+              const dispPharmacist = await db
+                .select()
+                .from(pharmacists)
+                .where(eq(pharmacists.id, (prescription as any).dispensedBy))
+                .limit(1);
+
+              if (dispPharmacist && dispPharmacist.length > 0) {
+                dispensedByLicenseNumber =
+                  dispPharmacist[0].licenseNumber ?? null;
+                const dispUser = await db
+                  .select()
+                  .from(users)
+                  .where(eq(users.id, dispPharmacist[0].userId))
+                  .limit(1);
+
+                if (dispUser && dispUser.length > 0) {
+                  dispensedByName = `${dispUser[0].firstName || ""} ${
+                    dispUser[0].lastName || ""
+                  }`.trim();
+                }
+              }
+            }
+
             return {
               ...prescription,
+              status: getEffectivePrescriptionStatus(
+                (prescription as any).status,
+                (prescription as any).expiryDate,
+                (prescription as any).dispensedAt
+              ),
               medications,
+              dispensedByName,
+              dispensedByLicenseNumber,
+              items,
             };
           })
         );

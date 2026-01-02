@@ -11,6 +11,13 @@ import {
   CardDescription,
 } from "@/components/ui/card";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Calendar,
   FileText,
   Users,
@@ -29,6 +36,7 @@ import {
   HardDrive,
   Smartphone,
   CheckCircle,
+  XCircle,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -617,7 +625,11 @@ function PharmacistDashboard() {
   const { data: recentPrescriptions, isLoading: prescriptionsLoading } =
     useQuery<any>({
       queryKey: ["/api/prescriptions/pharmacist/recent"],
+      refetchInterval: 5000, // Refresh every 5 seconds
     });
+
+  // Debug log
+  console.log("📋 Recent prescriptions data:", recentPrescriptions);
 
   const statsCards = [
     {
@@ -637,6 +649,12 @@ function PharmacistDashboard() {
       value: stats?.dispensedToday || 0,
       icon: Pill,
       color: "text-green-600",
+    },
+    {
+      title: "Not Dispensed Today",
+      value: stats?.notDispensedToday || 0,
+      icon: XCircle,
+      color: "text-red-600",
     },
     {
       title: "Total Completed",
@@ -661,9 +679,9 @@ function PharmacistDashboard() {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-5">
         {statsLoading
-          ? Array.from({ length: 4 }).map((_, i) => (
+          ? Array.from({ length: statsCards.length }).map((_, i) => (
               <Card key={i}>
                 <CardHeader className="pb-2">
                   <Skeleton className="h-4 w-32" />
@@ -692,7 +710,8 @@ function PharmacistDashboard() {
                     {stat.title === "Pending" && "Awaiting dispensing"}
                     {stat.title === "Dispensed Today" &&
                       "Successfully dispensed"}
-                    {stat.title === "Total Completed" && "All time completed"}
+                    {stat.title === "Not Dispensed Today" &&
+                      "Completed as not dispensed"}
                   </p>
                 </CardContent>
               </Card>
@@ -738,6 +757,19 @@ function PharmacistDashboard() {
                 </p>
               </div>
 
+              <div className="flex items-center justify-between p-3 bg-red-50 dark:bg-red-950 rounded-lg">
+                <div className="flex items-center gap-3">
+                  <XCircle className="h-8 w-8 text-red-600" />
+                  <div>
+                    <p className="text-sm font-medium">Not Dispensed Today</p>
+                    <p className="text-xs text-muted-foreground">Completed</p>
+                  </div>
+                </div>
+                <p className="text-2xl font-bold">
+                  {stats?.notDispensedToday || 0}
+                </p>
+              </div>
+
               <div className="flex items-center justify-between p-3 bg-amber-50 dark:bg-amber-950 rounded-lg">
                 <div className="flex items-center gap-3">
                   <Clock className="h-8 w-8 text-amber-600" />
@@ -771,7 +803,8 @@ function PharmacistDashboard() {
                   <span className="text-sm font-bold text-green-600">
                     {stats?.totalCompleted > 0
                       ? Math.round(
-                          (stats.dispensedToday / stats.totalCompleted) * 100
+                          ((stats.processedToday || 0) / stats.totalCompleted) *
+                            100
                         )
                       : 0}
                     %
@@ -785,7 +818,8 @@ function PharmacistDashboard() {
                         stats?.totalCompleted > 0
                           ? Math.min(
                               Math.round(
-                                (stats.dispensedToday / stats.totalCompleted) *
+                                ((stats.processedToday || 0) /
+                                  stats.totalCompleted) *
                                   100
                               ),
                               100
@@ -803,7 +837,8 @@ function PharmacistDashboard() {
                   <span className="text-sm font-bold text-blue-600">
                     {stats?.scannedToday > 0
                       ? Math.round(
-                          (stats.dispensedToday / stats.scannedToday) * 100
+                          ((stats.processedToday || 0) / stats.scannedToday) *
+                            100
                         )
                       : 0}
                     %
@@ -817,7 +852,8 @@ function PharmacistDashboard() {
                         stats?.scannedToday > 0
                           ? Math.min(
                               Math.round(
-                                (stats.dispensedToday / stats.scannedToday) *
+                                ((stats.processedToday || 0) /
+                                  stats.scannedToday) *
                                   100
                               ),
                               100
@@ -891,7 +927,7 @@ function PharmacistDashboard() {
                 size="sm"
                 className="rounded-full"
               >
-                Issued
+                Active
               </Button>
               <Button
                 variant={statusFilter === "dispensed" ? "default" : "outline"}
@@ -908,6 +944,16 @@ function PharmacistDashboard() {
                 className="rounded-full"
               >
                 Expired
+              </Button>
+              <Button
+                variant={
+                  statusFilter === "not_dispensed" ? "default" : "outline"
+                }
+                onClick={() => setStatusFilter("not_dispensed")}
+                size="sm"
+                className="rounded-full"
+              >
+                Not Dispensed
               </Button>
             </div>
 
@@ -990,11 +1036,17 @@ function PharmacistDashboard() {
               const filtered = recentPrescriptions.filter(
                 (prescription: any) => {
                   // Status filter
-                  if (
-                    statusFilter !== "all" &&
-                    prescription.status !== statusFilter
-                  ) {
-                    return false;
+                  if (statusFilter !== "all") {
+                    if (statusFilter === "issued") {
+                      if (
+                        prescription.status !== "issued" &&
+                        prescription.status !== "active"
+                      ) {
+                        return false;
+                      }
+                    } else if (prescription.status !== statusFilter) {
+                      return false;
+                    }
                   }
 
                   // Date filter based on lastScannedAt
@@ -1049,11 +1101,15 @@ function PharmacistDashboard() {
                                 ? "default"
                                 : prescription.status === "expired"
                                 ? "destructive"
+                                : prescription.status === "not_dispensed"
+                                ? "destructive"
                                 : "secondary"
                             }
                             className="text-xs px-3 py-1"
                           >
-                            {prescription.status}
+                            {prescription.status === "not_dispensed"
+                              ? "NOT DISPENSED"
+                              : String(prescription.status || "").toUpperCase()}
                           </Badge>
                         </div>
                         <div className="grid grid-cols-2 gap-3 text-sm">
@@ -1076,7 +1132,7 @@ function PharmacistDashboard() {
                                 {prescription.lastScannedAt
                                   ? new Date(
                                       prescription.lastScannedAt
-                                    ).toLocaleDateString()
+                                    ).toLocaleString()
                                   : "N/A"}
                               </p>
                             </div>
@@ -1094,12 +1150,33 @@ function PharmacistDashboard() {
                             <div className="flex items-center gap-2 text-muted-foreground">
                               <CheckCircle className="h-4 w-4" />
                               <div>
-                                <p className="text-xs">Dispensed</p>
+                                <p className="text-xs">
+                                  {prescription.status === "not_dispensed"
+                                    ? "Not Dispensed"
+                                    : prescription.status === "expired"
+                                    ? "Expired"
+                                    : "Dispensed"}
+                                </p>
                                 <p className="font-medium text-foreground">
                                   {new Date(
                                     prescription.dispensedAt
-                                  ).toLocaleDateString()}
+                                  ).toLocaleString()}
                                 </p>
+                                {((prescription as any).dispensedByName ||
+                                  (prescription as any).dispensedBy) && (
+                                  <p className="text-xs text-muted-foreground">
+                                    By:{" "}
+                                    {(prescription as any).dispensedByName ||
+                                      "Pharmacist"}
+                                    {(prescription as any)
+                                      .dispensedByLicenseNumber
+                                      ? ` (License No: ${
+                                          (prescription as any)
+                                            .dispensedByLicenseNumber
+                                        })`
+                                      : ""}
+                                  </p>
+                                )}
                               </div>
                             </div>
                           )}
@@ -1221,9 +1298,22 @@ function AdminDashboard() {
   const [showAlertsDialog, setShowAlertsDialog] = useState(false);
   const { isWidgetVisible } = useDashboardPreferences();
 
+  console.log("🔧 AdminDashboard Debug:", {
+    isLoading,
+    stats,
+    activityTimeline: activityTimeline?.length,
+    systemHealth,
+    pendingAppointments: pendingAppointments?.length,
+    revenueChart: revenueChart?.length,
+    userGrowthChart: userGrowthChart?.length,
+  });
+
   if (isLoading) {
+    console.log("⏳ Admin dashboard loading...");
     return <DashboardSkeleton />;
   }
+
+  console.log("✅ Admin dashboard loaded, rendering content");
 
   const statsCards = [
     {
