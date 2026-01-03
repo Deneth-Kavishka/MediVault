@@ -137,6 +137,15 @@ export default function Messages() {
     return () => clearInterval(timer);
   }, []);
 
+  // If navigated here with ?userId=<id>, auto-open that conversation
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const userId = new URLSearchParams(window.location.search).get("userId");
+    if (userId) {
+      setSelectedChat(userId);
+    }
+  }, [isAuthenticated]);
+
   // Fetch conversations list
   const { data: conversations = [], isLoading: conversationsLoading } =
     useQuery<Conversation[]>({

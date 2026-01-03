@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
@@ -61,6 +61,7 @@ import {
   useDashboardPreferences,
 } from "@/components/dashboard-customization";
 import PrescriptionDetailsDialog from "@/components/prescription-details-dialog";
+import LabAvailabilitySection from "@/components/lab-availability-section";
 
 export default function Dashboard() {
   const { user, isLoading, isAuthenticated } = useAuth();
@@ -1221,23 +1222,98 @@ function PharmacistDashboard() {
 }
 
 function LabTechnicianDashboard() {
+  const { data: labTests = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/lab-tests/technician"],
+  });
+
+  const todayKey = new Date().toDateString();
+
+  const pendingCount = (labTests || []).filter(
+    (t: any) => t.status === "pending" || t.status === "approved"
+  ).length;
+  const inProgressCount = (labTests || []).filter(
+    (t: any) => t.status === "in_progress"
+  ).length;
+  const completedCount = (labTests || []).filter(
+    (t: any) => t.status === "completed"
+  ).length;
+  const completedTodayCount = (labTests || []).filter((t: any) => {
+    if (t.status !== "completed" || !t.completionDate) return false;
+    return new Date(t.completionDate).toDateString() === todayKey;
+  }).length;
+  const abnormalCount = (labTests || []).filter(
+    (t: any) => t.status === "completed" && t.isAbnormal
+  ).length;
+
+  const completionRate = useMemo(() => {
+    const denom = pendingCount + inProgressCount + completedCount;
+    if (!denom) return 0;
+    return Math.round((completedCount / denom) * 100);
+  }, [completedCount, inProgressCount, pendingCount]);
+
+  const abnormalRate = useMemo(() => {
+    if (!completedCount) return 0;
+    return Math.round((abnormalCount / completedCount) * 100);
+  }, [abnormalCount, completedCount]);
+
+  const last7Days = useMemo(() => {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+
+    const days: {
+      key: string;
+      label: string;
+      completed: number;
+      abnormal: number;
+    }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(start);
+      d.setDate(start.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      const label = d.toLocaleDateString(undefined, {
+        month: "short",
+        day: "2-digit",
+      });
+      days.push({ key, label, completed: 0, abnormal: 0 });
+    }
+
+    const index = new Map(days.map((d) => [d.key, d] as const));
+    (labTests || []).forEach((t: any) => {
+      if (t.status !== "completed" || !t.completionDate) return;
+      const dt = new Date(t.completionDate);
+      if (isNaN(dt.getTime())) return;
+      const key = dt.toISOString().slice(0, 10);
+      const bucket = index.get(key);
+      if (!bucket) return;
+      bucket.completed += 1;
+      if (t.isAbnormal) bucket.abnormal += 1;
+    });
+
+    return days;
+  }, [labTests]);
+
   const statsCards = [
     {
       title: "Pending Tests",
-      value: "18",
+      value: pendingCount.toString(),
       icon: FlaskConical,
       color: "text-chart-1",
     },
-    { title: "In Progress", value: "7", icon: Activity, color: "text-chart-2" },
+    {
+      title: "In Progress",
+      value: inProgressCount.toString(),
+      icon: Activity,
+      color: "text-chart-2",
+    },
     {
       title: "Completed Today",
-      value: "25",
+      value: completedTodayCount.toString(),
       icon: FileText,
       color: "text-chart-3",
     },
     {
       title: "Abnormal Results",
-      value: "2",
+      value: abnormalCount.toString(),
       icon: Bell,
       color: "text-destructive",
     },
@@ -1245,6 +1321,23 @@ function LabTechnicianDashboard() {
 
   return (
     <div className="space-y-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight">Lab Technician</h2>
+          <p className="text-muted-foreground">
+            Overview of your workload, progress, and results.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button asChild variant="outline">
+            <a href="/lab-technician-tests">Test Requests</a>
+          </Button>
+          <Button asChild variant="outline">
+            <a href="/test-results">Test Results</a>
+          </Button>
+        </div>
+      </div>
+
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
         {statsCards.map((stat) => (
           <Card key={stat.title}>
@@ -1261,6 +1354,83 @@ function LabTechnicianDashboard() {
             </CardContent>
           </Card>
         ))}
+      </div>
+
+      <LabAvailabilitySection />
+
+      <div className="grid gap-6 md:grid-cols-3">
+        <Card className="md:col-span-1">
+          <CardHeader>
+            <CardTitle className="text-lg">Key Metrics</CardTitle>
+            <CardDescription>Today and overall performance</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">
+                Completion rate
+              </span>
+              <Badge variant="secondary">{completionRate}%</Badge>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">
+                Abnormal rate
+              </span>
+              <Badge variant={abnormalRate >= 25 ? "destructive" : "secondary"}>
+                {abnormalRate}%
+              </Badge>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">
+                Completed (total)
+              </span>
+              <Badge variant="outline">{completedCount}</Badge>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">Queue size</span>
+              <Badge variant="outline">{pendingCount + inProgressCount}</Badge>
+            </div>
+            {isLoading && (
+              <div className="text-xs text-muted-foreground">
+                Loading metrics…
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="md:col-span-2">
+          <CardHeader>
+            <CardTitle className="text-lg">
+              Completed Tests (Last 7 Days)
+            </CardTitle>
+            <CardDescription>
+              Daily completions and abnormal count
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={last7Days}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+                <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
+                <Tooltip
+                  formatter={(value: any, name: any) => [value, name]}
+                  labelFormatter={(label) => `Date: ${label}`}
+                />
+                <Legend />
+                <Bar
+                  dataKey="completed"
+                  name="Completed"
+                  fill="hsl(var(--chart-2))"
+                />
+                <Bar
+                  dataKey="abnormal"
+                  name="Abnormal"
+                  fill="hsl(var(--chart-1))"
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

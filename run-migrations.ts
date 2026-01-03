@@ -42,6 +42,24 @@ async function runMigrations() {
     await db.execute(sql.raw(migration3));
     console.log("✅ Cancelled_by field added");
 
+    // Migration 4: Add lab test report file metadata
+    console.log("\n4. Adding lab test report file columns...");
+    const migration4 = readFileSync(
+      join(process.cwd(), "migration_add_lab_test_report_files.sql"),
+      "utf-8"
+    );
+    await db.execute(sql.raw(migration4));
+    console.log("✅ Lab test report file columns added");
+
+    // Migration 5: Add lab test reports table
+    console.log("\n5. Creating lab test reports table...");
+    const migration5 = readFileSync(
+      join(process.cwd(), "migration_add_lab_test_reports_table.sql"),
+      "utf-8"
+    );
+    await db.execute(sql.raw(migration5));
+    console.log("✅ Lab test reports table created");
+
     console.log("\n✅ All migrations completed successfully!");
     await pool.end();
     process.exit(0);

@@ -55,8 +55,10 @@ interface LabFacility {
   address: string;
   city: string;
   phone?: string;
+  email?: string;
   latitude?: string;
   longitude?: string;
+  labTechnicianUserId?: string;
 }
 
 interface LabTest {
@@ -71,6 +73,11 @@ interface LabTest {
   labFacilityName?: string;
   labFacilityAddress?: string;
   labFacilityCity?: string;
+  labFacilityLatitude?: string | null;
+  labFacilityLongitude?: string | null;
+  labFacilityPhone?: string | null;
+  labFacilityEmail?: string | null;
+  labTechnicianUserId?: string | null;
   labTechnicianName?: string;
   testType: string;
   testName: string;
@@ -86,6 +93,16 @@ interface LabTest {
   isAbnormal: boolean;
   notes?: string;
   technicianNotes?: string;
+}
+
+interface LabTestReport {
+  id: string;
+  fileName?: string | null;
+  fileMime?: string | null;
+  fileSize?: number | null;
+  createdAt?: string;
+  viewUrl: string;
+  downloadUrl: string;
 }
 
 export default function LabResults() {
@@ -108,9 +125,19 @@ export default function LabResults() {
     enabled: isAuthenticated && !!user && user.role === "patient",
   });
 
+  const { data: reportFiles = [] } = useQuery<LabTestReport[]>({
+    queryKey: [
+      selectedTest?.id ? `/api/lab-tests/${selectedTest.id}/reports` : "",
+    ],
+    enabled:
+      isDetailDialogOpen &&
+      !!selectedTest?.id &&
+      selectedTest.status === "completed",
+  });
+
   const { data: labFacilities = [] } = useQuery<LabFacility[]>({
-    queryKey: ["/api/lab-facilities"],
-    enabled: isAuthenticated && !!user,
+    queryKey: ["/api/lab-facilities/available"],
+    enabled: isAuthenticated && !!user && user.role === "patient",
   });
 
   useEffect(() => {
@@ -487,7 +514,8 @@ export default function LabResults() {
       );
 
       if (!response.ok) {
-        throw new Error("Failed to select lab");
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.message || "Failed to select lab");
       }
 
       toast({
@@ -501,10 +529,55 @@ export default function LabResults() {
       console.error("Error selecting lab:", error);
       toast({
         title: "Error",
-        description: "Failed to select lab facility",
+        description:
+          error instanceof Error
+            ? error.message
+            : "Failed to select lab facility",
         variant: "destructive",
       });
     }
+  };
+
+  const openDirections = (facility: {
+    address?: string;
+    city?: string;
+    latitude?: string;
+    longitude?: string;
+  }) => {
+    const lat = facility.latitude?.trim();
+    const lng = facility.longitude?.trim();
+    const hasCoords = !!lat && !!lng;
+
+    const destination = hasCoords
+      ? `${lat},${lng}`
+      : encodeURIComponent(
+          `${facility.address || ""}${
+            facility.city ? `, ${facility.city}` : ""
+          }`.trim()
+        );
+
+    const url = hasCoords
+      ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+          destination
+        )}`
+      : `https://www.google.com/maps/dir/?api=1&destination=${destination}`;
+
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const contactLab = (labTechnicianUserId?: string) => {
+    if (!labTechnicianUserId) {
+      toast({
+        title: "Unavailable",
+        description: "This lab does not have a technician contact yet.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    window.location.href = `/messages?userId=${encodeURIComponent(
+      labTechnicianUserId
+    )}`;
   };
 
   return (
@@ -1132,6 +1205,48 @@ export default function LabResults() {
                         </p>
                       </div>
                     )}
+
+                    {(() => {
+                      const facility = selectedTest.labFacilityId
+                        ? labFacilities.find(
+                            (f) => f.id === selectedTest.labFacilityId
+                          )
+                        : undefined;
+                      const phone =
+                        facility?.phone ||
+                        selectedTest.labFacilityPhone ||
+                        undefined;
+
+                      return phone ? (
+                        <div>
+                          <label className="text-sm font-medium text-muted-foreground">
+                            Phone
+                          </label>
+                          <p>{phone}</p>
+                        </div>
+                      ) : null;
+                    })()}
+
+                    {(() => {
+                      const facility = selectedTest.labFacilityId
+                        ? labFacilities.find(
+                            (f) => f.id === selectedTest.labFacilityId
+                          )
+                        : undefined;
+                      const email =
+                        facility?.email ||
+                        selectedTest.labFacilityEmail ||
+                        undefined;
+
+                      return email ? (
+                        <div>
+                          <label className="text-sm font-medium text-muted-foreground">
+                            Email
+                          </label>
+                          <p>{email}</p>
+                        </div>
+                      ) : null;
+                    })()}
                     {selectedTest.labTechnicianName && (
                       <div>
                         <label className="text-sm font-medium text-muted-foreground">
@@ -1140,6 +1255,63 @@ export default function LabResults() {
                         <p>{selectedTest.labTechnicianName}</p>
                       </div>
                     )}
+
+                    <div className="flex gap-2 pt-1">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="flex-1"
+                        onClick={() => {
+                          const facility = selectedTest.labFacilityId
+                            ? labFacilities.find(
+                                (f) => f.id === selectedTest.labFacilityId
+                              )
+                            : undefined;
+                          openDirections(
+                            facility || {
+                              address: selectedTest.labFacilityAddress,
+                              city: selectedTest.labFacilityCity,
+                              latitude:
+                                selectedTest.labFacilityLatitude || undefined,
+                              longitude:
+                                selectedTest.labFacilityLongitude || undefined,
+                            }
+                          );
+                        }}
+                      >
+                        <MapPin className="h-4 w-4 mr-2" />
+                        Directions
+                      </Button>
+
+                      <Button
+                        type="button"
+                        variant="default"
+                        className="flex-1"
+                        onClick={() => {
+                          contactLab(
+                            selectedTest.labTechnicianUserId ||
+                              (selectedTest.labFacilityId
+                                ? labFacilities.find(
+                                    (f) => f.id === selectedTest.labFacilityId
+                                  )?.labTechnicianUserId
+                                : undefined)
+                          );
+                        }}
+                        disabled={
+                          !(
+                            selectedTest.labTechnicianUserId ||
+                            (selectedTest.labFacilityId
+                              ? labFacilities.find(
+                                  (f) => f.id === selectedTest.labFacilityId
+                                )?.labTechnicianUserId
+                              : undefined)
+                          )
+                        }
+                      >
+                        <User className="h-4 w-4 mr-2" />
+                        Contact Lab
+                      </Button>
+                    </div>
                   </CardContent>
                 </Card>
               )}
@@ -1195,27 +1367,77 @@ export default function LabResults() {
               )}
 
               {/* Action Buttons */}
-              <div className="flex gap-2 pt-2">
+              <div className="space-y-2 pt-2">
                 <Button
                   variant="default"
-                  className="flex-1"
+                  className="w-full"
                   onClick={() => downloadPDF(selectedTest)}
                 >
                   <Download className="h-4 w-4 mr-2" />
-                  Download PDF Report
+                  Download Full Lab Test Details
                 </Button>
-                {selectedTest.resultFileUrl && (
-                  <Button variant="outline" className="flex-1" asChild>
-                    <a
-                      href={selectedTest.resultFileUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      <FileText className="h-4 w-4 mr-2" />
-                      View Lab Report File
-                    </a>
-                  </Button>
-                )}
+
+                {reportFiles.length > 0 ? (
+                  <div className="space-y-2">
+                    {reportFiles.map((r) => (
+                      <div
+                        key={r.id}
+                        className="flex items-center justify-between gap-2 rounded-md border p-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm">
+                            {r.fileName || "Report file"}
+                          </p>
+                        </div>
+                        <div className="flex gap-2 shrink-0">
+                          <Button size="sm" variant="outline" asChild>
+                            <a
+                              href={r.viewUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              View
+                            </a>
+                          </Button>
+                          <Button size="sm" variant="default" asChild>
+                            <a
+                              href={r.downloadUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              download
+                            >
+                              Download
+                            </a>
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : selectedTest.resultFileUrl ? (
+                  <div className="flex gap-2">
+                    <Button variant="outline" className="flex-1" asChild>
+                      <a
+                        href={selectedTest.resultFileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <FileText className="h-4 w-4 mr-2" />
+                        View
+                      </a>
+                    </Button>
+                    <Button variant="default" className="flex-1" asChild>
+                      <a
+                        href={`${selectedTest.resultFileUrl}?download=1`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        download
+                      >
+                        <Download className="h-4 w-4 mr-2" />
+                        Download
+                      </a>
+                    </Button>
+                  </div>
+                ) : null}
               </div>
             </div>
           )}
@@ -1305,6 +1527,30 @@ export default function LabResults() {
                             <p>{facility.phone}</p>
                           </div>
                         )}
+
+                        <div className="flex gap-2 pt-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="flex-1"
+                            onClick={() => openDirections(facility)}
+                          >
+                            <MapPin className="h-4 w-4 mr-2" />
+                            Directions
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="default"
+                            className="flex-1"
+                            onClick={() =>
+                              contactLab(facility.labTechnicianUserId)
+                            }
+                            disabled={!facility.labTechnicianUserId}
+                          >
+                            <User className="h-4 w-4 mr-2" />
+                            Contact Lab
+                          </Button>
+                        </div>
                       </>
                     ) : null;
                   })()}

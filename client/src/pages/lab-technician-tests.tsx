@@ -111,11 +111,27 @@ export default function LabTechnicianTests() {
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || "Failed to approve test");
+        const contentType = response.headers.get("content-type") || "";
+        let message = "Failed to approve test";
+
+        if (contentType.includes("application/json")) {
+          const error = await response.json().catch(() => null);
+          message = error?.message || message;
+        } else {
+          const text = await response.text().catch(() => "");
+          message = text?.trim() ? text.trim() : message;
+        }
+
+        throw new Error(message);
       }
 
-      return response.json();
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        return response.json().catch(() => null);
+      }
+
+      // Some environments may return an empty body; treat as success.
+      return null;
     },
     onSuccess: () => {
       toast({
@@ -352,7 +368,7 @@ export default function LabTechnicianTests() {
 
       {/* Approve Test Dialog */}
       <Dialog open={isApproveDialogOpen} onOpenChange={setIsApproveDialogOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Approve Lab Test Request</DialogTitle>
             <DialogDescription>

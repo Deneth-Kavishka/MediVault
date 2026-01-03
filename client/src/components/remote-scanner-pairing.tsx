@@ -81,12 +81,10 @@ export function RemoteScannerPairing({
   const connectWebSocket = () => {
     setStatus("connecting");
 
-    // WebSocket server runs on dedicated port 5001 to avoid Vite HMR conflicts
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 
-    // Always use current hostname to ensure mobile can connect
-    const wsHost = `${window.location.hostname}:5001`;
-    const wsUrl = `${protocol}//${wsHost}`;
+    // Same-origin WebSocket (served by the main HTTP server)
+    const wsUrl = `${protocol}//${window.location.host}/ws/scanner`;
 
     console.log("Connecting to WebSocket:", wsUrl);
 
@@ -121,8 +119,8 @@ export function RemoteScannerPairing({
               sessionIdRef.current = data.sessionId;
               setStatus("waiting_mobile");
 
-              // Generate QR code for mobile pairing - use port 5000 where Express serves the app
-              const pairingUrl = `${window.location.protocol}//${window.location.hostname}:5000/mobile-scanner?code=${data.pairingCode}`;
+              // Generate QR code for mobile pairing (same origin)
+              const pairingUrl = `${window.location.origin}/mobile-scanner?code=${data.pairingCode}`;
               const qrUrl = await QRCodeLib.toDataURL(pairingUrl, {
                 width: 300,
                 margin: 2,

@@ -389,6 +389,10 @@ export const labFacilities = pgTable("lab_facilities", {
   email: varchar("email"),
   servicesOffered: text("services_offered"), // JSON array of test types offered
   operatingHours: text("operating_hours"), // JSON object with daily hours
+  // Patient visibility + technician availability
+  isPublished: boolean("is_published").notNull().default(false),
+  isAvailable: boolean("is_available").notNull().default(true),
+  availabilitySchedule: text("availability_schedule"), // JSON object for weekly schedule
   isActive: boolean("is_active").default(true),
   isVerified: boolean("is_verified").default(false), // Admin verification
   createdAt: timestamp("created_at").defaultNow(),
@@ -426,6 +430,11 @@ export const labTests = pgTable("lab_tests", {
 
   results: text("results"),
   resultFileUrl: varchar("result_file_url"),
+  // Stored report file metadata (server uses this for secure downloads)
+  resultFilePath: text("result_file_path"),
+  resultFileName: varchar("result_file_name"),
+  resultFileMime: varchar("result_file_mime"),
+  resultFileSize: integer("result_file_size"),
   isAbnormal: boolean("is_abnormal").default(false),
   notes: text("notes"), // Doctor's notes
   technicianNotes: text("technician_notes"), // Lab technician's notes
@@ -433,6 +442,27 @@ export const labTests = pgTable("lab_tests", {
 
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ============================================================================
+// LAB TEST REPORTS TABLE (supports multiple report documents per test)
+// ============================================================================
+
+export const labTestReports = pgTable("lab_test_reports", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  labTestId: varchar("lab_test_id")
+    .notNull()
+    .references(() => labTests.id),
+
+  filePath: text("file_path").notNull(),
+  fileName: varchar("file_name"),
+  fileMime: varchar("file_mime"),
+  fileSize: integer("file_size"),
+
+  uploadedByUserId: varchar("uploaded_by_user_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // ============================================================================

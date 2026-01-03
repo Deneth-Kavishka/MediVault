@@ -80,7 +80,7 @@ export function AppSidebar() {
         { title: "Appointments", url: "/appointments", icon: Calendar },
         { title: "Medical Records", url: "/medical-records", icon: FileText },
         { title: "Prescriptions", url: "/prescriptions", icon: Pill },
-        { title: "Lab Results", url: "/lab-results", icon: FlaskConical },
+        { title: "Lab Tests", url: "/lab-results", icon: FlaskConical },
       ],
       doctor: [
         { title: "My Availability", url: "/doctor/availability", icon: MapPin },
@@ -100,7 +100,7 @@ export function AppSidebar() {
       ],
       lab_technician: [
         {
-          title: "Pending Tests",
+          title: "Test Requests",
           url: "/lab-technician-tests",
           icon: FlaskConical,
         },

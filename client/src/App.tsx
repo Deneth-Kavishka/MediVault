@@ -27,6 +27,7 @@ import DoctorAvailability from "@/pages/doctor-availability";
 import LabTests from "@/pages/lab-tests";
 import LabResults from "@/pages/lab-results";
 import LabTechnicianTests from "@/pages/lab-technician-tests";
+import TestResults from "@/pages/test-results";
 import FindDoctors from "@/pages/find-doctors";
 import AdminDoctors from "@/pages/admin-doctors";
 import AdminAppointments from "@/pages/admin-appointments";
@@ -121,7 +122,7 @@ function Router() {
       <Route path="/appointments-admin" component={AdminAppointments} />
       <Route path="/inventory" component={Dashboard} />
       <Route path="/scanner" component={QRScannerPage} />
-      <Route path="/test-results" component={Dashboard} />
+      <Route path="/test-results" component={TestResults} />
       <Route path="/admin/users" component={AdminUsers} />
       <Route
         path="/admin/doctor-availability"

@@ -28,6 +28,7 @@ import {
   insertPrescriptionSchema,
   insertPrescriptionItemSchema,
   insertMedicineSchema,
+  insertLabFacilitySchema,
   insertLabTestSchema,
   insertBillSchema,
   insertBillItemSchema,
@@ -37,7 +38,10 @@ import {
   appointments,
   patients,
   doctorAvailability,
+  labTechnicians,
+  labFacilities,
   labTests as labTestsTable,
+  labTestReports,
   prescriptions,
   prescriptionItems,
   systemSettings,
@@ -48,7 +52,7 @@ import {
   users,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, sql, and, gte, count, ne, isNull } from "drizzle-orm";
+import { eq, sql, and, gte, count, ne, isNull, desc } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -3988,6 +3992,110 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .json({ message: "Lab facility ID is required" });
         }
 
+        const dayKeyFromDate = (date: Date) => {
+          const day = date.getDay();
+          switch (day) {
+            case 0:
+              return "sun";
+            case 1:
+              return "mon";
+            case 2:
+              return "tue";
+            case 3:
+              return "wed";
+            case 4:
+              return "thu";
+            case 5:
+              return "fri";
+            case 6:
+              return "sat";
+            default:
+              return "mon";
+          }
+        };
+
+        const isWithinSchedule = (scheduleText: string | null, now: Date) => {
+          if (!scheduleText) return true;
+
+          let schedule: any;
+          try {
+            schedule = JSON.parse(scheduleText);
+          } catch {
+            return false;
+          }
+
+          const todayKey = dayKeyFromDate(now);
+          const entry = schedule?.[todayKey];
+          if (!entry || entry.enabled === false) return false;
+
+          const start: string | undefined = entry.start;
+          const end: string | undefined = entry.end;
+          if (!start || !end) return false;
+
+          const toMinutes = (t: string) => {
+            const [hh, mm] = t.split(":");
+            const h = Number(hh);
+            const m = Number(mm);
+            if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+            return h * 60 + m;
+          };
+
+          const startMin = toMinutes(start);
+          const endMin = toMinutes(end);
+          if (startMin === null || endMin === null) return false;
+
+          const nowMin = now.getHours() * 60 + now.getMinutes();
+          if (endMin === startMin) return false;
+
+          // Support overnight windows (e.g., 22:00 -> 06:00)
+          if (endMin < startMin) {
+            return nowMin >= startMin || nowMin < endMin;
+          }
+
+          return nowMin >= startMin && nowMin < endMin;
+        };
+
+        // Ensure the selected facility is currently available to patients
+        const facilityForSelection = await db
+          .select()
+          .from(labFacilities)
+          .where(eq(labFacilities.id, labFacilityId))
+          .limit(1);
+
+        if (facilityForSelection.length === 0) {
+          return res.status(404).json({ message: "Lab facility not found" });
+        }
+
+        const facilityRow = facilityForSelection[0];
+        if (!facilityRow.isActive) {
+          return res
+            .status(400)
+            .json({ message: "Selected lab facility is not active" });
+        }
+
+        if (!facilityRow.isPublished) {
+          return res
+            .status(400)
+            .json({ message: "Selected lab facility is not published" });
+        }
+
+        if (!facilityRow.isAvailable) {
+          return res
+            .status(400)
+            .json({ message: "Selected lab facility is not available" });
+        }
+
+        if (
+          !isWithinSchedule(
+            facilityRow.availabilitySchedule ?? null,
+            new Date()
+          )
+        ) {
+          return res
+            .status(400)
+            .json({ message: "Selected lab facility is currently closed" });
+        }
+
         // Get patient record
         const patient = await storage.getPatientByUserId(userId);
         if (!patient) {
@@ -4028,26 +4136,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .returning();
 
         // Notify lab facility (if they have a technician)
-        const facility = await db
-          .select()
-          .from(sql.identifier("lab_facilities"))
-          .where(sql`${sql.identifier("lab_facilities")}.id = ${labFacilityId}`)
-          .limit(1);
-
-        if (facility.length > 0 && facility[0].lab_technician_id) {
+        if (facilityRow.labTechnicianId) {
           const labTech = await db
             .select()
-            .from(sql.identifier("lab_technicians"))
-            .where(
-              sql`${sql.identifier("lab_technicians")}.id = ${
-                facility[0].lab_technician_id
-              }`
-            )
+            .from(labTechnicians)
+            .where(eq(labTechnicians.id, facilityRow.labTechnicianId))
             .limit(1);
 
           if (labTech.length > 0) {
             await storage.createNotification({
-              recipientId: labTech[0].user_id,
+              recipientId: labTech[0].userId,
               type: "lab_result",
               title: "New Lab Test Request",
               message: `A patient has selected your facility for ${test[0].testName}`,
@@ -4091,10 +4189,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (user.role === "lab_technician") {
           const labTech = await db
             .select()
-            .from(sql.identifier("lab_technicians"))
-            .where(
-              sql`${sql.identifier("lab_technicians")}.user_id = ${userId}`
-            )
+            .from(labTechnicians)
+            .where(eq(labTechnicians.userId, userId))
             .limit(1);
 
           if (labTech.length > 0) {
@@ -4135,26 +4231,597 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .where(eq(labTestsTable.id, req.params.id))
           .returning();
 
-        // Notify patient about approval
-        await storage.createNotification({
-          recipientId: test[0].patientId,
-          type: "lab_result",
-          title: "Lab Test Approved",
-          message: `Your ${test[0].testName} has been approved. ${
-            sampleCollectionDate
-              ? `Sample collection scheduled for ${format(
-                  new Date(sampleCollectionDate),
-                  "MMM dd, yyyy 'at' HH:mm"
-                )}`
-              : "Please contact the lab for sample collection."
-          }`,
-          relatedEntityId: test[0].id,
-        });
+        const updatedRow =
+          updated[0] ||
+          ({
+            id: test[0].id,
+            status: "approved",
+            approvedDate: new Date(approvedDate),
+            sampleCollectionDate: sampleCollectionDate
+              ? new Date(sampleCollectionDate)
+              : null,
+            technicianNotes: technicianNotes || null,
+          } as any);
 
-        res.json(updated[0]);
+        // Notify patient about approval (best-effort; do not fail the approve if notification fails)
+        try {
+          let messageSuffix = "Please contact the lab for sample collection.";
+
+          if (sampleCollectionDate) {
+            try {
+              messageSuffix = `Sample collection scheduled for ${format(
+                new Date(sampleCollectionDate),
+                "MMM dd, yyyy 'at' HH:mm"
+              )}`;
+            } catch {
+              // If date formatting fails (invalid date), still approve; keep a simpler message.
+              messageSuffix = "Sample collection has been scheduled.";
+            }
+          }
+
+          await storage.createNotification({
+            recipientId: test[0].patientId,
+            type: "lab_result",
+            title: "Lab Test Approved",
+            message: `Your ${test[0].testName} has been approved. ${messageSuffix}`,
+            relatedEntityId: test[0].id,
+          });
+        } catch (notifyError) {
+          console.error(
+            "Warning: approved lab test but failed to notify patient:",
+            notifyError
+          );
+        }
+
+        // Always return valid JSON
+        res.json(updatedRow);
       } catch (error) {
         console.error("Error approving lab test:", error);
         res.status(500).json({ message: "Failed to approve lab test" });
+      }
+    }
+  );
+
+  // Lab technician starts an approved test (moves to in_progress)
+  app.patch(
+    "/api/lab-tests/:id/start",
+    isLabTechOrAdmin,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+
+        if (!user) {
+          return res.status(401).json({ message: "User not found" });
+        }
+
+        const test = await db
+          .select()
+          .from(labTestsTable)
+          .where(eq(labTestsTable.id, req.params.id))
+          .limit(1);
+
+        if (test.length === 0) {
+          return res.status(404).json({ message: "Lab test not found" });
+        }
+
+        if (test[0].status !== "approved") {
+          return res
+            .status(400)
+            .json({ message: "Can only start approved tests" });
+        }
+
+        // For lab technicians, ensure the test belongs to their facility
+        if (user.role === "lab_technician") {
+          const labTech = await db
+            .select()
+            .from(labTechnicians)
+            .where(eq(labTechnicians.userId, userId))
+            .limit(1);
+
+          if (labTech.length === 0) {
+            return res
+              .status(404)
+              .json({ message: "Lab technician profile not found" });
+          }
+
+          const facility = await db
+            .select()
+            .from(labFacilities)
+            .where(eq(labFacilities.labTechnicianId, labTech[0].id))
+            .limit(1);
+
+          if (facility.length === 0) {
+            return res.status(404).json({ message: "Lab facility not found" });
+          }
+
+          if (test[0].labFacilityId !== facility[0].id) {
+            return res
+              .status(403)
+              .json({ message: "You can only start tests for your facility" });
+          }
+        }
+
+        const updated = await db
+          .update(labTestsTable)
+          .set({
+            status: "in_progress",
+            testStartDate: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(labTestsTable.id, req.params.id))
+          .returning();
+
+        res.json(updated[0]);
+      } catch (error) {
+        console.error("Error starting lab test:", error);
+        res.status(500).json({ message: "Failed to start lab test" });
+      }
+    }
+  );
+
+  const authorizeLabTestReportAccess = async (req: any, labTestRow: any) => {
+    const userId = req.user?.id;
+    const user = userId ? await storage.getUser(userId) : null;
+
+    if (!userId || !user) {
+      return {
+        ok: false as const,
+        status: 401 as const,
+        message: "User not found",
+      };
+    }
+
+    if (user.role === "patient") {
+      const patient = await storage.getPatientByUserId(userId);
+      if (!patient || labTestRow.patientId !== patient.id) {
+        return {
+          ok: false as const,
+          status: 403 as const,
+          message: "Access denied",
+        };
+      }
+      return { ok: true as const, user };
+    }
+
+    if (user.role === "doctor") {
+      const doctor = await storage.getDoctorByUserId(userId);
+      if (!doctor || labTestRow.doctorId !== doctor.id) {
+        return {
+          ok: false as const,
+          status: 403 as const,
+          message: "Access denied",
+        };
+      }
+      return { ok: true as const, user };
+    }
+
+    if (user.role === "lab_technician") {
+      const labTech = await db
+        .select()
+        .from(labTechnicians)
+        .where(eq(labTechnicians.userId, userId))
+        .limit(1);
+
+      if (labTech.length === 0) {
+        return {
+          ok: false as const,
+          status: 404 as const,
+          message: "Lab technician profile not found",
+        };
+      }
+
+      // If the lab test is explicitly assigned to this technician, allow access.
+      if (
+        labTestRow.labTechnicianId &&
+        labTestRow.labTechnicianId === labTech[0].id
+      ) {
+        return { ok: true as const, user };
+      }
+
+      const facility = await db
+        .select()
+        .from(labFacilities)
+        .where(eq(labFacilities.labTechnicianId, labTech[0].id))
+        .limit(1);
+
+      if (
+        facility.length === 0 ||
+        labTestRow.labFacilityId !== facility[0].id
+      ) {
+        return {
+          ok: false as const,
+          status: 403 as const,
+          message: "Access denied",
+        };
+      }
+
+      return { ok: true as const, user };
+    }
+
+    if (user.role === "admin") {
+      return { ok: true as const, user };
+    }
+
+    return {
+      ok: false as const,
+      status: 403 as const,
+      message: "Access denied",
+    };
+  };
+
+  // Lab technician completes a test with a required report upload + details
+  app.post(
+    "/api/lab-tests/:id/complete",
+    isLabTechOrAdmin,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+
+        if (!user) {
+          return res.status(401).json({ message: "User not found" });
+        }
+
+        // For lab technicians, ensure the test belongs to their facility
+        if (user.role === "lab_technician") {
+          const labTech = await db
+            .select()
+            .from(labTechnicians)
+            .where(eq(labTechnicians.userId, userId))
+            .limit(1);
+
+          if (labTech.length === 0) {
+            return res
+              .status(404)
+              .json({ message: "Lab technician profile not found" });
+          }
+
+          const facility = await db
+            .select()
+            .from(labFacilities)
+            .where(eq(labFacilities.labTechnicianId, labTech[0].id))
+            .limit(1);
+
+          if (facility.length === 0) {
+            return res.status(404).json({ message: "Lab facility not found" });
+          }
+
+          const test = await db
+            .select()
+            .from(labTestsTable)
+            .where(eq(labTestsTable.id, req.params.id))
+            .limit(1);
+
+          if (test.length === 0) {
+            return res.status(404).json({ message: "Lab test not found" });
+          }
+
+          if (test[0].labFacilityId !== facility[0].id) {
+            return res.status(403).json({
+              message: "You can only complete tests for your facility",
+            });
+          }
+        }
+
+        const multer = await import("multer");
+        const path = await import("path");
+        const fs = await import("fs");
+
+        const uploadsRoot = path.join(
+          process.cwd(),
+          "uploads",
+          "lab-test-reports"
+        );
+        if (!fs.existsSync(uploadsRoot)) {
+          fs.mkdirSync(uploadsRoot, { recursive: true });
+        }
+
+        const safeName = (name: string) => {
+          const base = path.basename(name || "report");
+          return base.replace(/[^a-zA-Z0-9._-]+/g, "_");
+        };
+
+        const allowedExt = new Set([
+          ".pdf",
+          ".png",
+          ".jpg",
+          ".jpeg",
+          ".doc",
+          ".docx",
+        ]);
+
+        const storageEngine = multer.default.diskStorage({
+          destination: (r: any, _file, cb) => {
+            const folder = path.join(uploadsRoot, r.params.id);
+            if (!fs.existsSync(folder)) {
+              fs.mkdirSync(folder, { recursive: true });
+            }
+            cb(null, folder);
+          },
+          filename: (_req, file, cb) => {
+            const ext = path.extname(file.originalname || "").toLowerCase();
+            const originalSafe = safeName(file.originalname || "report");
+            const filename = `labtest-${
+              req.params.id
+            }-${Date.now()}-${originalSafe}`;
+            // Preserve extension if missing in original
+            if (!path.extname(filename) && ext) {
+              return cb(null, `${filename}${ext}`);
+            }
+            cb(null, filename);
+          },
+        });
+
+        const upload = multer.default({
+          storage: storageEngine,
+          limits: { fileSize: 25 * 1024 * 1024 },
+          fileFilter: (_req, file, cb) => {
+            const ext = path.extname(file.originalname || "").toLowerCase();
+            if (!allowedExt.has(ext)) {
+              return cb(
+                new Error(
+                  "Invalid file type. Allowed: pdf, png, jpg, jpeg, doc, docx"
+                )
+              );
+            }
+            cb(null, true);
+          },
+        });
+
+        // Accept either a single file (legacy `file`) or multiple (`files[]`)
+        upload.fields([
+          { name: "files", maxCount: 10 },
+          { name: "file", maxCount: 1 },
+        ])(req, res, async (err) => {
+          if (err) {
+            console.error("Lab report upload error:", err);
+            return res
+              .status(400)
+              .json({ message: err.message || "Upload failed" });
+          }
+
+          const filesObj = req.files as any;
+          const files: any[] = [];
+          if (filesObj?.file?.length) files.push(...filesObj.file);
+          if (filesObj?.files?.length) files.push(...filesObj.files);
+
+          if (files.length === 0) {
+            return res
+              .status(400)
+              .json({ message: "At least one report file is required" });
+          }
+
+          const results = (req.body?.results ?? "").toString().trim();
+          if (!results) {
+            return res
+              .status(400)
+              .json({ message: "Results details are required" });
+          }
+
+          const isAbnormalRaw = (req.body?.isAbnormal ?? "").toString();
+          const isAbnormal = ["true", "1", "yes", "on"].includes(
+            isAbnormalRaw.toLowerCase()
+          );
+          const technicianNotes =
+            (req.body?.technicianNotes ?? "").toString().trim() || null;
+
+          const test = await db
+            .select()
+            .from(labTestsTable)
+            .where(eq(labTestsTable.id, req.params.id))
+            .limit(1);
+
+          if (test.length === 0) {
+            return res.status(404).json({ message: "Lab test not found" });
+          }
+
+          if (test[0].status !== "in_progress") {
+            return res
+              .status(400)
+              .json({ message: "Can only complete in-progress tests" });
+          }
+
+          const toRelative = (p: string) =>
+            path.relative(process.cwd(), p).split(path.sep).join("/");
+
+          // Keep the first file in the legacy columns for backward compatibility.
+          const primaryFile = files[0];
+
+          let updated: any[] = [];
+          try {
+            await db.transaction(async (tx) => {
+              updated = await tx
+                .update(labTestsTable)
+                .set({
+                  status: "completed",
+                  completionDate: new Date(),
+                  results,
+                  isAbnormal,
+                  technicianNotes,
+                  resultFileUrl: `/api/lab-tests/${req.params.id}/report`,
+                  resultFilePath: toRelative(primaryFile.path),
+                  resultFileName: primaryFile.originalname,
+                  resultFileMime: primaryFile.mimetype,
+                  resultFileSize: primaryFile.size,
+                  updatedAt: new Date(),
+                })
+                .where(eq(labTestsTable.id, req.params.id))
+                .returning();
+
+              await tx.insert(labTestReports).values(
+                files.map((f) => ({
+                  labTestId: req.params.id,
+                  filePath: toRelative(f.path),
+                  fileName: f.originalname,
+                  fileMime: f.mimetype,
+                  fileSize: f.size,
+                  uploadedByUserId: userId,
+                  createdAt: new Date(),
+                }))
+              );
+            });
+          } catch (dbError) {
+            // Best-effort cleanup of uploaded files if DB write fails
+            try {
+              for (const f of files) {
+                try {
+                  fs.unlinkSync(f.path);
+                } catch {
+                  // ignore
+                }
+              }
+            } catch {
+              // ignore
+            }
+            throw dbError;
+          }
+
+          // Notify patient (best-effort)
+          try {
+            await storage.createNotification({
+              recipientId: test[0].patientId,
+              type: "lab_result",
+              title: "Lab Test Completed",
+              message: `Your ${test[0].testName} results are ready.`,
+              relatedEntityId: test[0].id,
+            });
+          } catch (notifyError) {
+            console.error(
+              "Warning: completed lab test but failed to notify patient:",
+              notifyError
+            );
+          }
+
+          return res.json(updated[0]);
+        });
+      } catch (error: any) {
+        console.error("Error completing lab test:", error);
+        res
+          .status(500)
+          .json({ message: error.message || "Failed to complete lab test" });
+      }
+    }
+  );
+
+  // List all uploaded report documents for a lab test
+  app.get(
+    "/api/lab-tests/:id/reports",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const test = await db
+          .select()
+          .from(labTestsTable)
+          .where(eq(labTestsTable.id, req.params.id))
+          .limit(1);
+
+        if (test.length === 0) {
+          return res.status(404).json({ message: "Lab test not found" });
+        }
+
+        const auth = await authorizeLabTestReportAccess(req, test[0]);
+        if (!auth.ok) {
+          return res.status(auth.status).json({ message: auth.message });
+        }
+
+        const reports = await db
+          .select()
+          .from(labTestReports)
+          .where(eq(labTestReports.labTestId, req.params.id))
+          .orderBy(desc(labTestReports.createdAt));
+
+        res.json(
+          reports.map((r: any) => ({
+            id: r.id,
+            fileName: r.fileName,
+            fileMime: r.fileMime,
+            fileSize: r.fileSize,
+            createdAt: r.createdAt,
+            viewUrl: `/api/lab-tests/${req.params.id}/reports/${r.id}`,
+            downloadUrl: `/api/lab-tests/${req.params.id}/reports/${r.id}?download=1`,
+          }))
+        );
+      } catch (error) {
+        console.error("Error listing lab test reports:", error);
+        res.status(500).json({ message: "Failed to fetch reports" });
+      }
+    }
+  );
+
+  // Securely serve a specific uploaded report document
+  app.get(
+    "/api/lab-tests/:id/reports/:reportId",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const path = await import("path");
+        const fs = await import("fs");
+
+        const test = await db
+          .select()
+          .from(labTestsTable)
+          .where(eq(labTestsTable.id, req.params.id))
+          .limit(1);
+
+        if (test.length === 0) {
+          return res.status(404).json({ message: "Lab test not found" });
+        }
+
+        const auth = await authorizeLabTestReportAccess(req, test[0]);
+        if (!auth.ok) {
+          return res.status(auth.status).json({ message: auth.message });
+        }
+
+        const report = await db
+          .select()
+          .from(labTestReports)
+          .where(
+            and(
+              eq(labTestReports.id, req.params.reportId),
+              eq(labTestReports.labTestId, req.params.id)
+            )
+          )
+          .limit(1);
+
+        if (report.length === 0) {
+          return res.status(404).json({ message: "Report not found" });
+        }
+
+        const row: any = report[0];
+        const uploadsRoot = path.resolve(path.join(process.cwd(), "uploads"));
+        const absolutePath = path.resolve(
+          path.join(process.cwd(), row.filePath)
+        );
+
+        if (!absolutePath.startsWith(uploadsRoot + path.sep)) {
+          return res.status(400).json({ message: "Invalid file path" });
+        }
+
+        if (!fs.existsSync(absolutePath)) {
+          return res.status(404).json({ message: "Report file not found" });
+        }
+
+        const filename = (row.fileName || `lab-report-${row.id}`)
+          .toString()
+          .replace(/[^a-zA-Z0-9._-]+/g, "_");
+
+        const wantsDownload =
+          (req.query?.download ?? "").toString().toLowerCase() === "1" ||
+          (req.query?.download ?? "").toString().toLowerCase() === "true";
+
+        res.setHeader(
+          "Content-Type",
+          row.fileMime || "application/octet-stream"
+        );
+        res.setHeader(
+          "Content-Disposition",
+          `${wantsDownload ? "attachment" : "inline"}; filename="${filename}"`
+        );
+        res.sendFile(absolutePath);
+      } catch (error) {
+        console.error("Error serving lab report file:", error);
+        res.status(500).json({ message: "Failed to fetch report" });
       }
     }
   );
@@ -4175,8 +4842,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Get lab technician record
         const labTech = await db
           .select()
-          .from(sql.identifier("lab_technicians"))
-          .where(sql`${sql.identifier("lab_technicians")}.user_id = ${userId}`)
+          .from(labTechnicians)
+          .where(eq(labTechnicians.userId, userId))
           .limit(1);
 
         if (labTech.length === 0) {
@@ -4188,12 +4855,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Get lab facility managed by this technician
         const facility = await db
           .select()
-          .from(sql.identifier("lab_facilities"))
-          .where(
-            sql`${sql.identifier("lab_facilities")}.lab_technician_id = ${
-              labTech[0].id
-            }`
-          )
+          .from(labFacilities)
+          .where(eq(labFacilities.labTechnicianId, labTech[0].id))
           .limit(1);
 
         let labTests: any[] = [];
@@ -4220,9 +4883,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               patientName: sql<string>`CONCAT(${patientUsers.firstName}, ' ', ${patientUsers.lastName})`,
               patientHealthId: patients.healthId,
               doctorName: sql<string>`CONCAT(${doctorUsers.firstName}, ' ', ${doctorUsers.lastName})`,
-              labFacilityName: sql<string>`${sql.identifier(
-                "lab_facilities"
-              )}.name`,
+              labFacilityName: labFacilities.name,
             })
             .from(labTestsTable)
             .leftJoin(patients, eq(patients.id, labTestsTable.patientId))
@@ -4230,10 +4891,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .leftJoin(doctors, eq(doctors.id, labTestsTable.doctorId))
             .leftJoin(doctorUsers, eq(doctorUsers.id, doctors.userId))
             .leftJoin(
-              sql.identifier("lab_facilities"),
-              sql`${sql.identifier("lab_facilities")}.id = ${
-                labTestsTable.labFacilityId
-              }`
+              labFacilities,
+              eq(labFacilities.id, labTestsTable.labFacilityId)
             )
             .where(eq(labTestsTable.labFacilityId, facility[0].id))
             .orderBy(sql`${labTestsTable.requestDate} DESC`);
@@ -4243,6 +4902,178 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (error) {
         console.error("Error fetching lab technician tests:", error);
         res.status(500).json({ message: "Failed to fetch lab tests" });
+      }
+    }
+  );
+
+  // Get all tests for lab technician's facility (for the Lab Tests tab)
+  app.get(
+    "/api/lab-tests/technician",
+    isLabTechOrAdmin,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+
+        if (!user) {
+          return res.status(401).json({ message: "User not found" });
+        }
+
+        // Get lab technician record
+        const labTech = await db
+          .select()
+          .from(labTechnicians)
+          .where(eq(labTechnicians.userId, userId))
+          .limit(1);
+
+        if (user.role === "lab_technician" && labTech.length === 0) {
+          return res
+            .status(404)
+            .json({ message: "Lab technician profile not found" });
+        }
+
+        // Get lab facility managed by this technician
+        const facility =
+          user.role === "lab_technician"
+            ? await db
+                .select()
+                .from(labFacilities)
+                .where(eq(labFacilities.labTechnicianId, labTech[0].id))
+                .limit(1)
+            : [];
+
+        if (user.role === "lab_technician" && facility.length === 0) {
+          return res.status(404).json({ message: "Lab facility not found" });
+        }
+
+        // Create table aliases
+        const patientUsers = alias(users, "patient_users");
+        const doctorUsers = alias(users, "doctor_users");
+
+        const labTests = await db
+          .select({
+            id: labTestsTable.id,
+            patientId: labTestsTable.patientId,
+            testType: labTestsTable.testType,
+            testName: labTestsTable.testName,
+            status: labTestsTable.status,
+            urgency: sql`COALESCE(${labTestsTable.urgency}, 'normal')`,
+            requestDate: labTestsTable.requestDate,
+            approvedDate: labTestsTable.approvedDate,
+            sampleCollectionDate: labTestsTable.sampleCollectionDate,
+            testStartDate: labTestsTable.testStartDate,
+            completionDate: labTestsTable.completionDate,
+            results: labTestsTable.results,
+            resultFileUrl: labTestsTable.resultFileUrl,
+            isAbnormal: labTestsTable.isAbnormal,
+            notes: labTestsTable.notes,
+            technicianNotes: labTestsTable.technicianNotes,
+            patientName: sql<string>`CONCAT(${patientUsers.firstName}, ' ', ${patientUsers.lastName})`,
+            patientHealthId: patients.healthId,
+            doctorName: sql<string>`CONCAT(${doctorUsers.firstName}, ' ', ${doctorUsers.lastName})`,
+            labFacilityName: labFacilities.name,
+          })
+          .from(labTestsTable)
+          .leftJoin(patients, eq(patients.id, labTestsTable.patientId))
+          .leftJoin(patientUsers, eq(patientUsers.id, patients.userId))
+          .leftJoin(doctors, eq(doctors.id, labTestsTable.doctorId))
+          .leftJoin(doctorUsers, eq(doctorUsers.id, doctors.userId))
+          .leftJoin(
+            labFacilities,
+            eq(labFacilities.id, labTestsTable.labFacilityId)
+          )
+          .where(
+            user.role === "lab_technician"
+              ? eq(labTestsTable.labFacilityId, facility[0].id)
+              : sql`TRUE`
+          )
+          .orderBy(sql`${labTestsTable.requestDate} DESC`);
+
+        res.json(labTests);
+      } catch (error) {
+        console.error("Error fetching lab technician lab tests:", error);
+        res.status(500).json({ message: "Failed to fetch lab tests" });
+      }
+    }
+  );
+
+  // Securely serve the uploaded lab report file
+  app.get(
+    "/api/lab-tests/:id/report",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const path = await import("path");
+        const fs = await import("fs");
+
+        const test = await db
+          .select()
+          .from(labTestsTable)
+          .where(eq(labTestsTable.id, req.params.id))
+          .limit(1);
+
+        if (test.length === 0) {
+          return res.status(404).json({ message: "Lab test not found" });
+        }
+
+        const auth = await authorizeLabTestReportAccess(req, test[0]);
+        if (!auth.ok) {
+          return res.status(auth.status).json({ message: auth.message });
+        }
+
+        // Prefer newest report from lab_test_reports; fallback to legacy single-file columns.
+        const latest = await db
+          .select()
+          .from(labTestReports)
+          .where(eq(labTestReports.labTestId, req.params.id))
+          .orderBy(desc(labTestReports.createdAt))
+          .limit(1);
+
+        const reportRow: any = latest[0] || null;
+        const legacyRow: any = test[0];
+
+        const filePath = reportRow?.filePath || legacyRow?.resultFilePath;
+        if (!filePath) {
+          return res.status(404).json({ message: "No report file available" });
+        }
+
+        const uploadsRoot = path.resolve(path.join(process.cwd(), "uploads"));
+        const absolutePath = path.resolve(path.join(process.cwd(), filePath));
+
+        if (!absolutePath.startsWith(uploadsRoot + path.sep)) {
+          return res.status(400).json({ message: "Invalid file path" });
+        }
+
+        if (!fs.existsSync(absolutePath)) {
+          return res.status(404).json({ message: "Report file not found" });
+        }
+
+        const filename = (
+          reportRow?.fileName ||
+          legacyRow?.resultFileName ||
+          `lab-report-${req.params.id}`
+        )
+          .toString()
+          .replace(/[^a-zA-Z0-9._-]+/g, "_");
+
+        const mimeType =
+          reportRow?.fileMime ||
+          legacyRow?.resultFileMime ||
+          "application/octet-stream";
+
+        const wantsDownload =
+          (req.query?.download ?? "").toString().toLowerCase() === "1" ||
+          (req.query?.download ?? "").toString().toLowerCase() === "true";
+
+        res.setHeader("Content-Type", mimeType);
+        res.setHeader(
+          "Content-Disposition",
+          `${wantsDownload ? "attachment" : "inline"}; filename="${filename}"`
+        );
+        res.sendFile(absolutePath);
+      } catch (error) {
+        console.error("Error serving lab report file:", error);
+        res.status(500).json({ message: "Failed to fetch report" });
       }
     }
   );
@@ -4341,36 +5172,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
           technicianNotes: labTestsTable.technicianNotes,
           doctorName: sql<string>`CONCAT(${doctorUsers.firstName}, ' ', ${doctorUsers.lastName})`,
           doctorSpecialization: doctors.specialization,
-          labFacilityName: sql<string>`${sql.identifier(
-            "lab_facilities"
-          )}.name`,
-          labFacilityAddress: sql<string>`${sql.identifier(
-            "lab_facilities"
-          )}.address`,
-          labFacilityCity: sql<string>`${sql.identifier(
-            "lab_facilities"
-          )}.city`,
+          labFacilityName: labFacilities.name,
+          labFacilityAddress: labFacilities.address,
+          labFacilityCity: labFacilities.city,
+          labFacilityLatitude: labFacilities.latitude,
+          labFacilityLongitude: labFacilities.longitude,
+          labFacilityPhone: labFacilities.phone,
+          labFacilityEmail: labFacilities.email,
+          labTechnicianUserId: labTechnicians.userId,
           labTechnicianName: sql<string>`CONCAT(${techUsers.firstName}, ' ', ${techUsers.lastName})`,
         })
         .from(labTestsTable)
         .leftJoin(doctors, eq(doctors.id, labTestsTable.doctorId))
         .leftJoin(doctorUsers, eq(doctorUsers.id, doctors.userId))
         .leftJoin(
-          sql.identifier("lab_facilities"),
-          sql`${sql.identifier("lab_facilities")}.id = ${
-            labTestsTable.labFacilityId
-          }`
+          labFacilities,
+          eq(labFacilities.id, labTestsTable.labFacilityId)
         )
         .leftJoin(
-          sql.identifier("lab_technicians"),
-          sql`${sql.identifier("lab_technicians")}.id = ${
-            labTestsTable.labTechnicianId
-          }`
+          labTechnicians,
+          eq(labTechnicians.id, labTestsTable.labTechnicianId)
         )
-        .leftJoin(
-          techUsers,
-          sql`${techUsers.id} = ${sql.identifier("lab_technicians")}.user_id`
-        )
+        .leftJoin(techUsers, eq(techUsers.id, labTechnicians.userId))
         .where(eq(labTestsTable.patientId, patient.id))
         .orderBy(sql`${labTestsTable.requestDate} DESC`);
 
@@ -4384,6 +5207,392 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
   // LAB FACILITIES ROUTES
   // ============================================================================
+
+  // Get the current lab technician's facility (if any)
+  app.get("/api/lab-facilities/me", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const user = await storage.getUser(userId);
+
+      if (!user || user.role !== "lab_technician") {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const labTech = await db
+        .select()
+        .from(labTechnicians)
+        .where(eq(labTechnicians.userId, userId))
+        .limit(1);
+
+      if (labTech.length === 0) {
+        return res
+          .status(404)
+          .json({ message: "Lab technician profile not found" });
+      }
+
+      const facility = await db
+        .select()
+        .from(labFacilities)
+        .where(eq(labFacilities.labTechnicianId, labTech[0].id))
+        .limit(1);
+
+      if (facility.length === 0) {
+        return res
+          .status(404)
+          .json({ message: "No lab facility found for this technician" });
+      }
+
+      const f = facility[0];
+      res.json({
+        id: f.id,
+        name: f.name,
+        description: f.description,
+        address: f.address,
+        city: f.city,
+        latitude: f.latitude,
+        longitude: f.longitude,
+        phone: f.phone,
+        email: f.email,
+        isActive: f.isActive,
+        isVerified: f.isVerified,
+        isPublished: f.isPublished,
+        isAvailable: f.isAvailable,
+        availabilitySchedule: f.availabilitySchedule,
+      });
+    } catch (error) {
+      console.error("Error fetching technician lab facility:", error);
+      res.status(500).json({ message: "Failed to fetch lab facility" });
+    }
+  });
+
+  // Update the current lab technician's publish/availability settings
+  app.patch(
+    "/api/lab-facilities/me/settings",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+
+        if (!user || user.role !== "lab_technician") {
+          return res.status(403).json({ message: "Access denied" });
+        }
+
+        const {
+          isPublished,
+          isAvailable,
+          availabilitySchedule,
+          name,
+          description,
+          address,
+          city,
+          phone,
+          email,
+          latitude,
+          longitude,
+        } = req.body;
+
+        if (
+          typeof isPublished === "undefined" &&
+          typeof isAvailable === "undefined" &&
+          typeof availabilitySchedule === "undefined" &&
+          typeof name === "undefined" &&
+          typeof description === "undefined" &&
+          typeof address === "undefined" &&
+          typeof city === "undefined" &&
+          typeof phone === "undefined" &&
+          typeof email === "undefined" &&
+          typeof latitude === "undefined" &&
+          typeof longitude === "undefined"
+        ) {
+          return res.status(400).json({ message: "No settings provided" });
+        }
+
+        if (
+          typeof isPublished !== "undefined" &&
+          typeof isPublished !== "boolean"
+        ) {
+          return res
+            .status(400)
+            .json({ message: "isPublished must be a boolean" });
+        }
+
+        if (
+          typeof isAvailable !== "undefined" &&
+          typeof isAvailable !== "boolean"
+        ) {
+          return res
+            .status(400)
+            .json({ message: "isAvailable must be a boolean" });
+        }
+
+        if (typeof name !== "undefined" && typeof name !== "string") {
+          return res.status(400).json({ message: "name must be a string" });
+        }
+
+        if (
+          typeof description !== "undefined" &&
+          description !== null &&
+          typeof description !== "string"
+        ) {
+          return res
+            .status(400)
+            .json({ message: "description must be string|null" });
+        }
+
+        if (typeof address !== "undefined" && typeof address !== "string") {
+          return res.status(400).json({ message: "address must be a string" });
+        }
+
+        if (typeof city !== "undefined" && typeof city !== "string") {
+          return res.status(400).json({ message: "city must be a string" });
+        }
+
+        if (
+          typeof phone !== "undefined" &&
+          phone !== null &&
+          typeof phone !== "string"
+        ) {
+          return res.status(400).json({ message: "phone must be string|null" });
+        }
+
+        if (
+          typeof email !== "undefined" &&
+          email !== null &&
+          typeof email !== "string"
+        ) {
+          return res.status(400).json({ message: "email must be string|null" });
+        }
+
+        const normalizeDecimal = (value: unknown, field: string) => {
+          if (value === null) return null;
+          if (typeof value === "number") return value.toString();
+          if (typeof value === "string") {
+            const trimmed = value.trim();
+            if (!trimmed) return null;
+            if (!Number.isFinite(Number(trimmed))) {
+              throw new Error(`${field} must be a number`);
+            }
+            return trimmed;
+          }
+          if (typeof value === "undefined") return undefined;
+          throw new Error(`${field} must be string|number|null`);
+        };
+
+        let latitudeText: string | null | undefined = undefined;
+        let longitudeText: string | null | undefined = undefined;
+        try {
+          latitudeText = normalizeDecimal(latitude, "latitude");
+          longitudeText = normalizeDecimal(longitude, "longitude");
+        } catch (e: any) {
+          return res
+            .status(400)
+            .json({ message: e?.message || "Invalid coordinates" });
+        }
+
+        let scheduleText: string | null | undefined = undefined;
+        if (typeof availabilitySchedule !== "undefined") {
+          if (availabilitySchedule === null) {
+            scheduleText = null;
+          } else if (typeof availabilitySchedule === "object") {
+            scheduleText = JSON.stringify(availabilitySchedule);
+          } else if (typeof availabilitySchedule === "string") {
+            scheduleText = availabilitySchedule;
+          } else {
+            return res.status(400).json({
+              message: "availabilitySchedule must be object|string|null",
+            });
+          }
+        }
+
+        const labTech = await db
+          .select()
+          .from(labTechnicians)
+          .where(eq(labTechnicians.userId, userId))
+          .limit(1);
+
+        if (labTech.length === 0) {
+          return res
+            .status(404)
+            .json({ message: "Lab technician profile not found" });
+        }
+
+        const facility = await db
+          .select()
+          .from(labFacilities)
+          .where(eq(labFacilities.labTechnicianId, labTech[0].id))
+          .limit(1);
+
+        if (facility.length === 0) {
+          return res
+            .status(404)
+            .json({ message: "No lab facility found for this technician" });
+        }
+
+        const updates: any = {
+          updatedAt: new Date(),
+        };
+        if (typeof isPublished !== "undefined")
+          updates.isPublished = isPublished;
+        if (typeof isAvailable !== "undefined")
+          updates.isAvailable = isAvailable;
+        if (typeof scheduleText !== "undefined")
+          updates.availabilitySchedule = scheduleText;
+        if (typeof name !== "undefined") updates.name = name;
+        if (typeof description !== "undefined")
+          updates.description = description;
+        if (typeof address !== "undefined") updates.address = address;
+        if (typeof city !== "undefined") updates.city = city;
+        if (typeof phone !== "undefined") updates.phone = phone;
+        if (typeof email !== "undefined") updates.email = email;
+        if (typeof latitudeText !== "undefined")
+          updates.latitude = latitudeText;
+        if (typeof longitudeText !== "undefined")
+          updates.longitude = longitudeText;
+
+        const updated = await db
+          .update(labFacilities)
+          .set(updates)
+          .where(eq(labFacilities.id, facility[0].id))
+          .returning();
+
+        const f = updated[0];
+        res.json({
+          id: f.id,
+          name: f.name,
+          description: f.description,
+          address: f.address,
+          city: f.city,
+          latitude: f.latitude,
+          longitude: f.longitude,
+          phone: f.phone,
+          email: f.email,
+          isActive: f.isActive,
+          isVerified: f.isVerified,
+          isPublished: f.isPublished,
+          isAvailable: f.isAvailable,
+          availabilitySchedule: f.availabilitySchedule,
+        });
+      } catch (error) {
+        console.error(
+          "Error updating technician lab facility settings:",
+          error
+        );
+        res.status(500).json({ message: "Failed to update lab settings" });
+      }
+    }
+  );
+
+  // Get labs that are currently available to patients (published + available + within schedule)
+  app.get(
+    "/api/lab-facilities/available",
+    isAuthenticated,
+    async (req, res) => {
+      try {
+        const dayKeyFromDate = (date: Date) => {
+          const day = date.getDay();
+          switch (day) {
+            case 0:
+              return "sun";
+            case 1:
+              return "mon";
+            case 2:
+              return "tue";
+            case 3:
+              return "wed";
+            case 4:
+              return "thu";
+            case 5:
+              return "fri";
+            case 6:
+              return "sat";
+            default:
+              return "mon";
+          }
+        };
+
+        const isWithinSchedule = (scheduleText: string | null, now: Date) => {
+          if (!scheduleText) return true;
+          let schedule: any;
+          try {
+            schedule = JSON.parse(scheduleText);
+          } catch {
+            return false;
+          }
+
+          const todayKey = dayKeyFromDate(now);
+          const entry = schedule?.[todayKey];
+          if (!entry || entry.enabled === false) return false;
+
+          const start: string | undefined = entry.start;
+          const end: string | undefined = entry.end;
+          if (!start || !end) return false;
+
+          const toMinutes = (t: string) => {
+            const [hh, mm] = t.split(":");
+            const h = Number(hh);
+            const m = Number(mm);
+            if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+            return h * 60 + m;
+          };
+
+          const startMin = toMinutes(start);
+          const endMin = toMinutes(end);
+          if (startMin === null || endMin === null) return false;
+
+          const nowMin = now.getHours() * 60 + now.getMinutes();
+          if (endMin === startMin) return false;
+
+          if (endMin < startMin) {
+            return nowMin >= startMin || nowMin < endMin;
+          }
+
+          return nowMin >= startMin && nowMin < endMin;
+        };
+
+        const now = new Date();
+        const facilities = await db
+          .select({
+            facility: labFacilities,
+            labTechnicianUserId: labTechnicians.userId,
+          })
+          .from(labFacilities)
+          .leftJoin(
+            labTechnicians,
+            eq(labFacilities.labTechnicianId, labTechnicians.id)
+          )
+          .where(
+            and(
+              eq(labFacilities.isActive, true),
+              eq(labFacilities.isPublished, true),
+              eq(labFacilities.isAvailable, true)
+            )
+          )
+          .orderBy(labFacilities.city, labFacilities.name);
+
+        const available = facilities
+          .filter((row) =>
+            isWithinSchedule(row.facility.availabilitySchedule ?? null, now)
+          )
+          .map((row) => ({
+            id: row.facility.id,
+            name: row.facility.name,
+            address: row.facility.address,
+            city: row.facility.city,
+            phone: row.facility.phone,
+            email: row.facility.email,
+            latitude: row.facility.latitude,
+            longitude: row.facility.longitude,
+            labTechnicianUserId: row.labTechnicianUserId ?? undefined,
+          }));
+
+        res.json(available);
+      } catch (error) {
+        console.error("Error fetching available lab facilities:", error);
+        res.status(500).json({ message: "Failed to fetch lab facilities" });
+      }
+    }
+  );
 
   // Get all active lab facilities
   app.get("/api/lab-facilities", isAuthenticated, async (req, res) => {
@@ -4418,24 +5627,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // If lab technician, set their ID
       let labTechnicianId = req.body.labTechnicianId;
       if (user.role === "lab_technician") {
-        const labTech = await db
+        const labTechRows = await db
           .select()
-          .from(sql.identifier("lab_technicians"))
-          .where(sql`${sql.identifier("lab_technicians")}.user_id = ${userId}`)
+          .from(labTechnicians)
+          .where(eq(labTechnicians.userId, userId))
           .limit(1);
 
-        if (labTech.length > 0) {
-          labTechnicianId = labTech[0].id;
+        let labTech = labTechRows[0];
+        if (!labTech) {
+          const created = await db
+            .insert(labTechnicians)
+            .values({ userId })
+            .returning();
+          labTech = created[0];
         }
+
+        labTechnicianId = labTech.id;
       }
 
+      const validated = insertLabFacilitySchema.parse({
+        ...req.body,
+        labTechnicianId,
+        isVerified: user.role === "admin", // Auto-verify if created by admin
+      });
+
       const facility = await db
-        .insert(sql.identifier("lab_facilities"))
-        .values({
-          ...req.body,
-          lab_technician_id: labTechnicianId,
-          is_verified: user.role === "admin", // Auto-verify if created by admin
-        })
+        .insert(labFacilities)
+        .values(validated)
         .returning();
 
       res.status(201).json(facility[0]);
@@ -4458,12 +5676,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const facility = await db
-        .update(sql.identifier("lab_facilities"))
+        .update(labFacilities)
         .set({
           ...req.body,
-          updated_at: new Date(),
+          updatedAt: new Date(),
         })
-        .where(sql`${sql.identifier("lab_facilities")}.id = ${req.params.id}`)
+        .where(eq(labFacilities.id, req.params.id))
         .returning();
 
       if (facility.length === 0) {

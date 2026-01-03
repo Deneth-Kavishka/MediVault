@@ -49,10 +49,8 @@ export default function MobileScanner() {
     console.log("🔵 Mobile: Starting connection with code:", code);
     setStatus("pairing");
 
-    // WebSocket server runs on dedicated port 5001 to avoid Vite HMR conflicts
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsHost = `${window.location.hostname}:5001`;
-    const wsUrl = `${protocol}//${wsHost}`;
+    const wsUrl = `${protocol}//${window.location.host}/ws/scanner`;
 
     console.log("🔵 Mobile: Connecting to WebSocket:", wsUrl);
 

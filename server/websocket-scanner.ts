@@ -1,7 +1,6 @@
-// WebSocket server for mobile scanner pairing on dedicated port
+// WebSocket server for mobile scanner pairing (attached to main HTTP server)
 import { WebSocketServer, WebSocket } from "ws";
 import type { Server } from "http";
-import { createServer } from "http";
 import crypto from "crypto";
 
 interface ScannerSession {
@@ -15,7 +14,7 @@ interface ScannerSession {
 
 const sessions = new Map<string, ScannerSession>();
 const SESSION_TIMEOUT = 15 * 60 * 1000; // 15 minutes
-const WS_PORT = 5001; // Separate port to avoid Vite HMR conflicts
+const WS_PATH = "/ws/scanner";
 
 // Generate random pairing code
 function generatePairingCode(): string {
@@ -36,9 +35,7 @@ setInterval(() => {
 }, 60000); // Check every minute
 
 export function setupScannerWebSocket(_mainServer: Server) {
-  // Create a separate HTTP server for WebSocket on port 5001
-  const wsHttpServer = createServer();
-  const wss = new WebSocketServer({ server: wsHttpServer });
+  const wss = new WebSocketServer({ server: _mainServer, path: WS_PATH });
 
   wss.on("connection", (ws: WebSocket, req) => {
     console.log(
@@ -134,10 +131,7 @@ export function setupScannerWebSocket(_mainServer: Server) {
     });
   });
 
-  // Start the WebSocket server on dedicated port
-  wsHttpServer.listen(WS_PORT, "0.0.0.0", () => {
-    console.log(`✅ WebSocket server listening on ws://localhost:${WS_PORT}`);
-  });
+  console.log(`✅ Scanner WebSocket attached at ${WS_PATH}`);
 }
 
 // PC requests pairing - generate code and create session
