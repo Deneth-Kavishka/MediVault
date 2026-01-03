@@ -43,10 +43,42 @@ export const users = pgTable("users", {
   profileImageUrl: varchar("profile_image_url"),
   role: varchar("role").notNull(), // 'patient' | 'doctor' | 'pharmacist' | 'lab_technician' | 'admin'
   isActive: boolean("is_active").default(true).notNull(), // Soft delete - false means deactivated
+  mustChangePassword: boolean("must_change_password").default(false).notNull(), // Force password change on first login
   deactivatedAt: timestamp("deactivated_at"), // When user was deactivated
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+// ============================================================================
+// PATIENT REGISTRATION REQUESTS (Patient-only self registration)
+// ============================================================================
+
+export const patientRegistrationRequests = pgTable(
+  "patient_registration_requests",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    email: varchar("email").notNull().unique(),
+    firstName: varchar("first_name").notNull(),
+    lastName: varchar("last_name").notNull(),
+    nic: varchar("nic").notNull().unique(),
+    dateOfBirth: timestamp("date_of_birth"),
+    gender: varchar("gender"),
+    contactInfo: varchar("contact_info"),
+    address: text("address"),
+    bloodType: varchar("blood_type"),
+    allergies: text("allergies"),
+    status: varchar("status").notNull().default("pending"), // 'pending' | 'approved' | 'rejected'
+    adminNotes: text("admin_notes"),
+    assignedHealthId: varchar("assigned_health_id"),
+    assignedRfid: varchar("assigned_rfid"),
+    approvedUserId: varchar("approved_user_id").references(() => users.id),
+    reviewedBy: varchar("reviewed_by").references(() => users.id),
+    submittedAt: timestamp("submitted_at").defaultNow(),
+    reviewedAt: timestamp("reviewed_at"),
+  }
+);
 
 // ============================================================================
 // PATIENT TABLE
@@ -854,6 +886,24 @@ export const medicalAccessLogsRelations = relations(
 
 // User schemas
 export const upsertUserSchema = createInsertSchema(users);
+export const insertPatientRegistrationRequestSchema = createInsertSchema(
+  patientRegistrationRequests
+)
+  .omit({
+    id: true,
+    status: true,
+    adminNotes: true,
+    assignedHealthId: true,
+    assignedRfid: true,
+    approvedUserId: true,
+    reviewedBy: true,
+    submittedAt: true,
+    reviewedAt: true,
+  })
+  .extend({
+    // HTML date inputs and JSON payloads deliver strings; coerce to Date.
+    dateOfBirth: z.coerce.date().optional().nullable(),
+  });
 export const insertPatientSchema = createInsertSchema(patients).omit({
   id: true,
   createdAt: true,
@@ -968,6 +1018,12 @@ export const insertMedicalAccessLogSchema = createInsertSchema(
 
 export type UpsertUser = z.infer<typeof upsertUserSchema>;
 export type User = typeof users.$inferSelect;
+
+export type InsertPatientRegistrationRequest = z.infer<
+  typeof insertPatientRegistrationRequestSchema
+>;
+export type PatientRegistrationRequest =
+  typeof patientRegistrationRequests.$inferSelect;
 
 export type InsertPatient = z.infer<typeof insertPatientSchema>;
 export type Patient = typeof patients.$inferSelect;

@@ -57,6 +57,7 @@ import {
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ToastAction } from "@/components/ui/toast";
 
 interface User {
   id: string;
@@ -84,6 +85,17 @@ export default function AdminUsers() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
+  const buildUsernameFromName = (firstName: string, lastName: string) => {
+    const base =
+      `${firstName || ""}.${lastName || ""}`
+        .toLowerCase()
+        .replace(/[^a-z0-9.]/g, "")
+        .replace(/\.+/g, ".")
+        .replace(/^\.|\.$/g, "")
+        .slice(0, 24) || "user";
+    return base;
+  };
+
   const [activeTab, setActiveTab] = useState<"active" | "deactivated">(
     "active"
   );
@@ -95,6 +107,48 @@ export default function AdminUsers() {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [originalUserData, setOriginalUserData] = useState<any>(null);
   const [isLoadingUserData, setIsLoadingUserData] = useState(false);
+  const [isAddUsernameManual, setIsAddUsernameManual] = useState(false);
+  const [lastCreatedCredentials, setLastCreatedCredentials] = useState<{
+    userId: string;
+    email?: string;
+    username: string;
+    temporaryPassword: string;
+  } | null>(null);
+
+  const resendCredentialsMutation = useMutation({
+    mutationFn: async (payload: {
+      userId: string;
+      temporaryPassword: string;
+      email?: string;
+    }) => {
+      return await api.post(
+        `/api/admin/users/${payload.userId}/send-credentials`,
+        {
+          temporaryPassword: payload.temporaryPassword,
+          ...(payload.email ? { email: payload.email } : {}),
+        }
+      );
+    },
+    onSuccess: (data: any) => {
+      toast({
+        title: data?.emailSent === true ? "Email sent" : "Email not sent",
+        description:
+          data?.emailSent === true
+            ? "Credentials email sent successfully."
+            : `Failed to send credentials email. ${
+                data?.emailError ? `Reason: ${data.emailError}` : ""
+              }`,
+        variant: data?.emailSent === true ? "default" : "destructive",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to resend credentials email",
+        variant: "destructive",
+      });
+    },
+  });
 
   const [addForm, setAddForm] = useState({
     username: "",
@@ -195,8 +249,12 @@ export default function AdminUsers() {
   const addUserMutation = useMutation({
     mutationFn: async (userData: any) => {
       const payload: any = {
-        username: userData.username,
-        password: userData.password,
+        ...(userData.username && String(userData.username).trim().length > 0
+          ? { username: String(userData.username).trim() }
+          : {}),
+        ...(userData.password && String(userData.password).trim().length > 0
+          ? { password: String(userData.password) }
+          : {}),
         email: userData.email,
         firstName: userData.firstName,
         lastName: userData.lastName,
@@ -236,17 +294,62 @@ export default function AdminUsers() {
 
       return await api.post("/api/admin/users", payload);
     },
-    onSuccess: () => {
+    onSuccess: (data: any, variables: any) => {
       queryClient.invalidateQueries({ queryKey: ["admin-users"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/stats"] });
       // Invalidate role-specific queries
       queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
       queryClient.invalidateQueries({ queryKey: ["/api/doctors"] });
+
+      const temporaryPassword =
+        typeof data?.temporaryPassword === "string" && data.temporaryPassword
+          ? data.temporaryPassword
+          : typeof variables?.password === "string"
+          ? variables.password
+          : "";
+
+      if (data?.id && typeof data?.username === "string" && temporaryPassword) {
+        setLastCreatedCredentials({
+          userId: String(data.id),
+          email: (data?.email || variables?.email) as any,
+          username: String(data.username),
+          temporaryPassword,
+        });
+      } else {
+        setLastCreatedCredentials(null);
+      }
+
       toast({
         title: "Success",
-        description: "User created successfully",
+        description:
+          data?.emailSent === true
+            ? "User created successfully. Email sent."
+            : data?.emailSent === false
+            ? `User created successfully, but email was not sent. ${
+                data?.emailError ? `Reason: ${data.emailError}` : ""
+              }`
+            : "User created successfully",
+        action:
+          data?.emailSent === false && temporaryPassword && data?.id ? (
+            <ToastAction
+              altText="Resend credentials email"
+              onClick={() =>
+                resendCredentialsMutation.mutate({
+                  userId: String(data.id),
+                  temporaryPassword,
+                  email:
+                    typeof (data?.email || variables?.email) === "string"
+                      ? String(data?.email || variables?.email)
+                      : undefined,
+                })
+              }
+            >
+              Resend email
+            </ToastAction>
+          ) : undefined,
       });
       setAddDialogOpen(false);
+      setIsAddUsernameManual(false);
       // Reset form
       setAddForm({
         username: "",
@@ -533,10 +636,10 @@ export default function AdminUsers() {
 
   const handleAddSubmit = () => {
     // Validate required fields
-    if (!addForm.username || !addForm.password || !addForm.role) {
+    if (!addForm.role) {
       toast({
         title: "Validation Error",
-        description: "Username, password, and role are required",
+        description: "Role is required",
         variant: "destructive",
       });
       return;
@@ -861,7 +964,13 @@ export default function AdminUsers() {
       </Card>
 
       {/* Add User Dialog */}
-      <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+      <Dialog
+        open={addDialogOpen}
+        onOpenChange={(open) => {
+          setAddDialogOpen(open);
+          if (!open) setIsAddUsernameManual(false);
+        }}
+      >
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Add New User</DialogTitle>
@@ -873,18 +982,20 @@ export default function AdminUsers() {
             {/* Basic Information */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="add-username">Username *</Label>
+                <Label htmlFor="add-username">Username</Label>
                 <Input
                   id="add-username"
                   value={addForm.username}
-                  onChange={(e) =>
-                    setAddForm({ ...addForm, username: e.target.value })
-                  }
-                  placeholder="john.doe"
+                  onChange={(e) => {
+                    const nextValue = e.target.value;
+                    setAddForm({ ...addForm, username: nextValue });
+                    setIsAddUsernameManual(nextValue.trim().length > 0);
+                  }}
+                  placeholder="Auto-generated from first/last name"
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="add-password">Password *</Label>
+                <Label htmlFor="add-password">Password</Label>
                 <Input
                   id="add-password"
                   type="password"
@@ -892,7 +1003,7 @@ export default function AdminUsers() {
                   onChange={(e) =>
                     setAddForm({ ...addForm, password: e.target.value })
                   }
-                  placeholder="••••••••"
+                  placeholder="Leave empty to auto-generate"
                 />
               </div>
             </div>
@@ -903,9 +1014,19 @@ export default function AdminUsers() {
                 <Input
                   id="add-firstName"
                   value={addForm.firstName}
-                  onChange={(e) =>
-                    setAddForm({ ...addForm, firstName: e.target.value })
-                  }
+                  onChange={(e) => {
+                    const nextFirstName = e.target.value;
+                    setAddForm({
+                      ...addForm,
+                      firstName: nextFirstName,
+                      username: isAddUsernameManual
+                        ? addForm.username
+                        : buildUsernameFromName(
+                            nextFirstName,
+                            addForm.lastName
+                          ),
+                    });
+                  }}
                 />
               </div>
               <div className="space-y-2">
@@ -913,9 +1034,19 @@ export default function AdminUsers() {
                 <Input
                   id="add-lastName"
                   value={addForm.lastName}
-                  onChange={(e) =>
-                    setAddForm({ ...addForm, lastName: e.target.value })
-                  }
+                  onChange={(e) => {
+                    const nextLastName = e.target.value;
+                    setAddForm({
+                      ...addForm,
+                      lastName: nextLastName,
+                      username: isAddUsernameManual
+                        ? addForm.username
+                        : buildUsernameFromName(
+                            addForm.firstName,
+                            nextLastName
+                          ),
+                    });
+                  }}
                 />
               </div>
             </div>

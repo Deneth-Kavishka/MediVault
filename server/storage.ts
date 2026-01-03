@@ -243,9 +243,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async upsertUser(userData: UpsertUser): Promise<User> {
+    const insertData: UpsertUser = userData.id
+      ? userData
+      : {
+          ...userData,
+          // Force password change for newly created users by default.
+          mustChangePassword: userData.mustChangePassword ?? true,
+        };
     const [user] = await db
       .insert(users)
-      .values(userData)
+      .values(insertData)
       .onConflictDoUpdate({
         target: users.id,
         set: {

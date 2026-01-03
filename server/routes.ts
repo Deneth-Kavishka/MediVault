@@ -5,6 +5,8 @@ import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { format } from "date-fns";
 import { randomBytes } from "crypto";
+import bcrypt from "bcryptjs";
+import { sendPatientApprovalEmail, sendUserCreatedEmail } from "./email";
 // Use local authentication
 import {
   setupAuth,
@@ -19,6 +21,7 @@ import {
   isLabTechOrAdmin,
 } from "./localAuth";
 import {
+  insertPatientRegistrationRequestSchema,
   insertPatientSchema,
   insertDoctorSchema,
   insertPharmacistSchema,
@@ -37,6 +40,7 @@ import {
   insertChatMessageSchema,
   appointments,
   patients,
+  patientRegistrationRequests,
   doctorAvailability,
   labTechnicians,
   labFacilities,
@@ -52,7 +56,7 @@ import {
   users,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, sql, and, gte, count, ne, isNull, desc } from "drizzle-orm";
+import { eq, sql, and, or, gte, count, ne, isNull, desc } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -62,6 +66,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
   setupAuth(app);
 
   // Note: Login, register, logout, and auth/user endpoints are handled in localAuth.ts
+
+  // ============================================================================
+  // PATIENT SELF-REGISTRATION (REQUESTS)
+  // ============================================================================
+  // Patients submit a registration request and must wait for admin approval.
+  app.post(
+    "/api/patient-registrations",
+    async (req: Request, res: Response) => {
+      try {
+        const data = insertPatientRegistrationRequestSchema.parse(req.body);
+
+        // Prevent duplicates against existing accounts/records
+        if (data.email) {
+          const existingByEmail = await db
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.email, data.email))
+            .limit(1);
+          if (existingByEmail.length > 0) {
+            return res
+              .status(409)
+              .json({ message: "An account already exists with this email" });
+          }
+        }
+
+        const existingByNic = await db
+          .select({ id: patients.id })
+          .from(patients)
+          .where(eq(patients.nic, data.nic))
+          .limit(1);
+        if (existingByNic.length > 0) {
+          return res
+            .status(409)
+            .json({ message: "A patient already exists with this NIC" });
+        }
+
+        const existingRequest = await db
+          .select({ id: patientRegistrationRequests.id })
+          .from(patientRegistrationRequests)
+          .where(
+            or(
+              eq(patientRegistrationRequests.nic, data.nic),
+              eq(patientRegistrationRequests.email, data.email)
+            )
+          )
+          .limit(1);
+        if (existingRequest.length > 0) {
+          return res.status(409).json({
+            message:
+              "A registration request already exists for this email/NIC. Please wait for admin approval.",
+          });
+        }
+
+        const created = await db
+          .insert(patientRegistrationRequests)
+          .values({
+            email: data.email,
+            firstName: data.firstName,
+            lastName: data.lastName,
+            nic: data.nic,
+            dateOfBirth: data.dateOfBirth ?? undefined,
+            gender: data.gender,
+            contactInfo: data.contactInfo,
+            address: data.address,
+            bloodType: data.bloodType,
+            allergies: data.allergies,
+          })
+          .returning();
+
+        return res.status(201).json({
+          message:
+            "Registration submitted. Please wait for admin approval. You will receive an email with your username and password once approved.",
+          request: created[0],
+        });
+      } catch (error: any) {
+        console.error("Error creating patient registration request:", error);
+        return res.status(400).json({
+          message: error?.message || "Failed to submit registration",
+        });
+      }
+    }
+  );
 
   // ============================================================================
   // PATIENT ROUTES
@@ -6009,6 +6095,229 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // List patient registration requests (admin only)
+  app.get("/api/admin/patient-registrations", isAdmin, async (req, res) => {
+    try {
+      const status =
+        typeof req.query.status === "string" ? req.query.status : undefined;
+
+      const rows = await db
+        .select()
+        .from(patientRegistrationRequests)
+        .where(
+          status ? eq(patientRegistrationRequests.status, status) : sql`TRUE`
+        )
+        .orderBy(desc(patientRegistrationRequests.submittedAt));
+
+      res.json(rows);
+    } catch (error) {
+      console.error("Error fetching patient registration requests:", error);
+      res
+        .status(500)
+        .json({ message: "Failed to fetch registration requests" });
+    }
+  });
+
+  // Approve a patient registration request (admin only)
+  app.post(
+    "/api/admin/patient-registrations/:id/approve",
+    isAdmin,
+    async (req: any, res) => {
+      try {
+        const requestId = req.params.id;
+        const { rfid, healthId } = req.body as {
+          rfid?: string;
+          healthId?: string;
+        };
+
+        if (!rfid || typeof rfid !== "string" || rfid.trim().length < 3) {
+          return res
+            .status(400)
+            .json({ message: "RFID is required to approve a patient" });
+        }
+
+        const reqRows = await db
+          .select()
+          .from(patientRegistrationRequests)
+          .where(eq(patientRegistrationRequests.id, requestId))
+          .limit(1);
+
+        const reg = reqRows[0];
+        if (!reg) {
+          return res
+            .status(404)
+            .json({ message: "Registration request not found" });
+        }
+
+        if (reg.status !== "pending") {
+          return res
+            .status(400)
+            .json({ message: `Request is already ${reg.status}` });
+        }
+
+        // Ensure NIC/email aren't already used
+        const existingPatient = await db
+          .select({ id: patients.id })
+          .from(patients)
+          .where(eq(patients.nic, reg.nic))
+          .limit(1);
+        if (existingPatient.length > 0) {
+          return res
+            .status(409)
+            .json({ message: "A patient already exists with this NIC" });
+        }
+
+        const existingEmail = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.email, reg.email))
+          .limit(1);
+        if (existingEmail.length > 0) {
+          return res
+            .status(409)
+            .json({ message: "An account already exists with this email" });
+        }
+
+        const existingRfid = await db
+          .select({ id: patients.id })
+          .from(patients)
+          .where(eq(patients.rfid, rfid.trim()))
+          .limit(1);
+        if (existingRfid.length > 0) {
+          return res.status(409).json({ message: "RFID is already in use" });
+        }
+
+        const generateTempPassword = () => {
+          const raw = randomBytes(12).toString("base64");
+          const cleaned = raw.replace(/[^a-zA-Z0-9]/g, "");
+          return (cleaned + "A1").slice(0, 12);
+        };
+
+        const generateUniqueUsername = async () => {
+          const base =
+            `${reg.firstName}.${reg.lastName}`
+              .toLowerCase()
+              .replace(/[^a-z0-9.]/g, "")
+              .replace(/\.+/g, ".")
+              .replace(/^\.|\.$/g, "")
+              .slice(0, 18) || "patient";
+
+          for (let i = 0; i < 8; i++) {
+            const suffix = (Math.floor(Math.random() * 9000) + 1000).toString();
+            const candidate = `${base}${suffix}`.slice(0, 24);
+            const exists = await db
+              .select({ id: users.id })
+              .from(users)
+              .where(eq(users.username, candidate))
+              .limit(1);
+            if (exists.length === 0) return candidate;
+          }
+          return `patient${Date.now()}`;
+        };
+
+        const generateUniqueHealthId = async () => {
+          for (let i = 0; i < 8; i++) {
+            const candidate = `MV-${randomBytes(4).toString("hex")}`;
+            const exists = await db
+              .select({ id: patients.id })
+              .from(patients)
+              .where(eq(patients.healthId, candidate))
+              .limit(1);
+            if (exists.length === 0) return candidate;
+          }
+          return `MV-${Date.now()}`;
+        };
+
+        const username = await generateUniqueUsername();
+        const temporaryPassword = generateTempPassword();
+        const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
+        const assignedHealthId =
+          healthId?.trim() || (await generateUniqueHealthId());
+
+        // Create user
+        const createdUsers = await db
+          .insert(users)
+          .values({
+            username,
+            email: reg.email,
+            password: hashedPassword,
+            firstName: reg.firstName,
+            lastName: reg.lastName,
+            role: "patient",
+            isActive: true,
+            mustChangePassword: true,
+          })
+          .returning();
+
+        const createdUser = createdUsers[0];
+
+        // Create patient record
+        const createdPatients = await db
+          .insert(patients)
+          .values({
+            userId: createdUser.id,
+            nic: reg.nic,
+            healthId: assignedHealthId,
+            rfid: rfid.trim(),
+            dateOfBirth: reg.dateOfBirth ?? undefined,
+            gender: reg.gender ?? undefined,
+            contactInfo: reg.contactInfo ?? undefined,
+            address: reg.address ?? undefined,
+            bloodType: reg.bloodType ?? undefined,
+            allergies: reg.allergies ?? undefined,
+          })
+          .returning();
+
+        // Update request
+        await db
+          .update(patientRegistrationRequests)
+          .set({
+            status: "approved",
+            assignedHealthId,
+            assignedRfid: rfid.trim(),
+            approvedUserId: createdUser.id,
+            reviewedBy: req.user.id,
+            reviewedAt: new Date(),
+          })
+          .where(eq(patientRegistrationRequests.id, requestId));
+
+        // Send email (best-effort; do not fail approval if email fails)
+        let emailResult: any = { sent: false, error: undefined };
+        try {
+          emailResult = await sendPatientApprovalEmail({
+            to: reg.email,
+            fullName: `${reg.firstName} ${reg.lastName}`.trim(),
+            username,
+            temporaryPassword,
+            nic: reg.nic,
+            healthId: assignedHealthId,
+            rfid: rfid.trim(),
+          });
+        } catch (err: any) {
+          const message = err?.response || err?.message || String(err);
+          console.error("Approval email send threw:", message);
+          emailResult = { sent: false, error: message };
+        }
+
+        const { password: _password, ...userWithoutPassword } =
+          createdUser as any;
+
+        res.json({
+          message: "Patient approved successfully",
+          patient: createdPatients[0],
+          user: userWithoutPassword,
+          emailSent: emailResult.sent,
+          emailError: (emailResult as any).error,
+        });
+      } catch (error: any) {
+        console.error("Error approving patient registration:", error);
+        res.status(500).json({
+          message: error?.message || "Failed to approve registration",
+        });
+      }
+    }
+  );
+
   // Create new user (admin only)
   app.post("/api/admin/users", isAdmin, async (req, res) => {
     try {
@@ -6023,25 +6332,115 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } = req.body;
 
       // Validate required fields
-      if (!username || !password || !role) {
-        return res
-          .status(400)
-          .json({ message: "Username, password, and role are required" });
+      if (!role) {
+        return res.status(400).json({ message: "Role is required" });
       }
+
+      const generateTempPassword = () => {
+        const raw = randomBytes(12).toString("base64");
+        const cleaned = raw.replace(/[^a-zA-Z0-9]/g, "");
+        return (cleaned + "A1").slice(0, 12);
+      };
+
+      const generateUniqueUsernameFromName = async () => {
+        const base =
+          `${firstName || ""}.${lastName || ""}`
+            .toLowerCase()
+            .replace(/[^a-z0-9.]/g, "")
+            .replace(/\.+/g, ".")
+            .replace(/^\.|\.$/g, "")
+            .slice(0, 20) || "user";
+
+        const isAvailable = async (candidate: string) => {
+          const exists = await db
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.username, candidate))
+            .limit(1);
+          return exists.length === 0;
+        };
+
+        const trimmedBase = base.slice(0, 24);
+        if (await isAvailable(trimmedBase)) return trimmedBase;
+
+        for (let i = 2; i <= 999; i++) {
+          const suffix = String(i);
+          const candidate = `${base}${suffix}`.slice(0, 24);
+          if (await isAvailable(candidate)) return candidate;
+        }
+
+        return `${base}${Date.now()}`.slice(0, 24);
+      };
+
+      const requestedUsername =
+        typeof username === "string" ? username.trim() : "";
+      let finalUsername =
+        requestedUsername.length > 0
+          ? requestedUsername
+          : await generateUniqueUsernameFromName();
+
+      const requestedPassword = typeof password === "string" ? password : "";
+      const plainTemporaryPassword =
+        requestedPassword.trim().length > 0
+          ? requestedPassword
+          : generateTempPassword();
+      const generatedPassword = requestedPassword.trim().length === 0;
 
       // Hash password
       const bcrypt = await import("bcrypt");
-      const hashedPassword = await bcrypt.hash(password, 10);
+      const hashedPassword = await bcrypt.hash(plainTemporaryPassword, 10);
 
       // Create user
-      const user = await storage.upsertUser({
-        username,
-        password: hashedPassword,
-        email,
-        firstName,
-        lastName,
-        role,
-      });
+      let user: any;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          user = await storage.upsertUser({
+            username: finalUsername,
+            password: hashedPassword,
+            email,
+            firstName,
+            lastName,
+            role,
+            mustChangePassword: true,
+          });
+          break;
+        } catch (err: any) {
+          const code = err?.code;
+          const constraint = String(err?.constraint || "");
+          const message = err?.detail || err?.message || String(err);
+
+          const isUsernameUniqueViolation =
+            code === "23505" &&
+            (constraint.toLowerCase().includes("username") ||
+              message.toLowerCase().includes("username"));
+
+          if (isUsernameUniqueViolation) {
+            // If requested username collides, append a numeric suffix.
+            const base = (
+              requestedUsername.length > 0
+                ? requestedUsername
+                : `${firstName || ""}.${lastName || ""}`
+                    .toLowerCase()
+                    .replace(/[^a-z0-9.]/g, "")
+                    .replace(/\.+/g, ".")
+                    .replace(/^\.|\.$/g, "")
+                    .slice(0, 20) || "user"
+            ).slice(0, 20);
+
+            const candidate = `${base}${attempt + 2}`.slice(0, 24);
+            finalUsername = candidate;
+            continue;
+          }
+
+          throw err;
+        }
+      }
+
+      if (!user) {
+        return res
+          .status(409)
+          .json({ message: "Failed to create unique user" });
+      }
 
       // If role is patient, create patient record with RFID
       if (role === "patient" && patientData) {
@@ -6087,7 +6486,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      res.status(201).json({ ...user, password: undefined });
+      // Send account email (best-effort)
+      let emailSent = false;
+      let emailError: string | undefined;
+      if (email && typeof email === "string" && email.trim().length > 3) {
+        try {
+          const result = await sendUserCreatedEmail({
+            to: email.trim(),
+            fullName: `${firstName || ""} ${lastName || ""}`.trim() || null,
+            username: finalUsername,
+            temporaryPassword: String(plainTemporaryPassword),
+            role: String(role),
+          });
+          emailSent = !!(result as any)?.sent;
+          emailError = (result as any)?.error;
+        } catch (err: any) {
+          const message = err?.response || err?.message || String(err);
+          console.error("User-created email send threw:", message);
+          emailSent = false;
+          emailError = message;
+        }
+      } else {
+        emailSent = false;
+        emailError = "No email address provided for user";
+      }
+
+      res.status(201).json({
+        ...user,
+        password: undefined,
+        emailSent,
+        emailError,
+        generatedPassword,
+        temporaryPassword:
+          generatedPassword || emailSent === false
+            ? plainTemporaryPassword
+            : undefined,
+      });
     } catch (error: any) {
       console.error("Error creating user:", error);
       res
@@ -6109,6 +6543,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to fetch users" });
     }
   });
+
+  // Manually resend credentials email (admin only)
+  app.post(
+    "/api/admin/users/:id/send-credentials",
+    isAdmin,
+    async (req, res) => {
+      try {
+        const { id } = req.params;
+        const temporaryPassword =
+          typeof req.body?.temporaryPassword === "string"
+            ? req.body.temporaryPassword
+            : "";
+        const overrideEmail =
+          typeof req.body?.email === "string" ? req.body.email.trim() : "";
+
+        if (!temporaryPassword || temporaryPassword.trim().length === 0) {
+          return res
+            .status(400)
+            .json({ message: "temporaryPassword is required" });
+        }
+
+        const user = await storage.getUser(id);
+        if (!user) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        const toEmail = overrideEmail || (user as any).email;
+        if (!toEmail || String(toEmail).trim().length < 4) {
+          return res.status(400).json({ message: "User has no email address" });
+        }
+
+        let emailSent = false;
+        let emailError: string | undefined;
+        try {
+          const result = await sendUserCreatedEmail({
+            to: String(toEmail).trim(),
+            fullName:
+              `${(user as any).firstName || ""} ${
+                (user as any).lastName || ""
+              }`.trim() || null,
+            username: (user as any).username,
+            temporaryPassword: String(temporaryPassword),
+            role: String((user as any).role),
+          });
+          emailSent = !!(result as any)?.sent;
+          emailError = (result as any)?.error;
+        } catch (err: any) {
+          const message = err?.response || err?.message || String(err);
+          console.error("Manual credentials email send threw:", message);
+          emailSent = false;
+          emailError = message;
+        }
+
+        res.json({ emailSent, emailError });
+      } catch (error: any) {
+        console.error("Error resending credentials:", error);
+        res
+          .status(500)
+          .json({ message: error?.message || "Failed to send credentials" });
+      }
+    }
+  );
 
   // Get deactivated users
   app.get("/api/admin/users/deactivated", isAdmin, async (req, res) => {

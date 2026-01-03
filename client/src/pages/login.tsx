@@ -17,11 +17,13 @@ import {
   Heart,
   Shield,
   Users,
-  Lock,
+  ShieldCheck,
   Moon,
   Sun,
   Sparkles,
   ArrowRight,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { queryClient } from "@/lib/queryClient";
 import { motion, AnimatePresence } from "framer-motion";
@@ -36,6 +38,82 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const { theme, setTheme } = useTheme();
   const [particleCount] = useState(20);
+
+  // Typing effect states
+  const [brandName, setBrandName] = useState("");
+  const [tagline, setTagline] = useState("");
+  const [description, setDescription] = useState("");
+  const [showStats, setShowStats] = useState(false);
+  const [animatedStats, setAnimatedStats] = useState([0, 0, 0]);
+
+  const brandNameFull = "MediVault";
+  const taglineFull = "All Your Care, One Secure Place";
+  const descriptionFull =
+    "Advanced healthcare management platform connecting patients, doctors, and medical professionals for seamless care.";
+
+  // Typing animation effect
+  useEffect(() => {
+    let cancelled = false;
+
+    const typeText = (
+      full: string,
+      setValue: (v: string) => void,
+      msPerChar: number
+    ) =>
+      new Promise<void>((resolve) => {
+        let i = 0;
+        const tick = () => {
+          if (cancelled) return;
+          i += 1;
+          setValue(full.slice(0, i));
+          if (i >= full.length) return resolve();
+          window.setTimeout(tick, msPerChar);
+        };
+        setValue("");
+        window.setTimeout(tick, msPerChar);
+      });
+
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => {
+        if (cancelled) return;
+        window.setTimeout(() => resolve(), ms);
+      });
+
+    (async () => {
+      await wait(300);
+      await typeText(brandNameFull, setBrandName, 50);
+      await wait(150);
+      await typeText(taglineFull, setTagline, 30);
+      await wait(150);
+      await typeText(descriptionFull, setDescription, 15);
+      await wait(250);
+      setShowStats(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Counting animation for stats
+  useEffect(() => {
+    if (!showStats) return;
+
+    const targets = [10000, 500, 99.9];
+    const durationMs = 2000;
+    const start = performance.now();
+    let raf = 0;
+
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / durationMs);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setAnimatedStats(targets.map((v) => Math.round(v * eased * 10) / 10));
+      if (t < 1) raf = window.requestAnimationFrame(tick);
+    };
+
+    raf = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(raf);
+  }, [showStats]);
 
   // Create particle animations
   const particles = Array.from({ length: particleCount }, (_, i) => ({
@@ -79,7 +157,11 @@ export default function LoginPage() {
 
       // Small delay to ensure query refetch completes
       setTimeout(() => {
-        setLocation("/dashboard");
+        if (data?.user?.mustChangePassword) {
+          setLocation("/change-password");
+        } else {
+          setLocation("/dashboard");
+        }
       }, 100);
     } catch (err) {
       console.error("Login error:", err);
@@ -235,94 +317,128 @@ export default function LoginPage() {
                     />
                   </div>
                 </div>
-                <h1 className="text-5xl font-bold text-gray-800 dark:text-white">
-                  MediVault
+                <h1 className="text-5xl font-bold text-gray-800 dark:text-white min-h-[60px]">
+                  {brandName}
+                  {brandName.length < brandNameFull.length && (
+                    <span className="animate-pulse">|</span>
+                  )}
                 </h1>
               </motion.div>
 
               <motion.p
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.4 }}
-                className="text-2xl font-semibold text-transparent bg-clip-text bg-gradient-to-r from-[#0EA5C9] to-[#1494B5]"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: tagline ? 1 : 0 }}
+                transition={{ duration: 0.3 }}
+                className="text-2xl font-semibold text-transparent bg-clip-text bg-gradient-to-r from-[#0EA5C9] to-[#1494B5] min-h-[36px] text-justify"
               >
-                All Your Care, One Secure Place
+                {tagline}
+                {tagline.length > 0 && tagline.length < taglineFull.length && (
+                  <span className="text-[#0EA5C9]">|</span>
+                )}
               </motion.p>
 
               <motion.p
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.5 }}
-                className="text-lg text-gray-600 dark:text-gray-400 max-w-md"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: description ? 1 : 0 }}
+                transition={{ duration: 0.3 }}
+                className="text-lg text-gray-600 dark:text-gray-400 max-w-md min-h-[84px] text-justify leading-snug tracking-tight"
               >
-                Advanced healthcare management platform connecting patients,
-                doctors, and medical professionals for seamless care.
+                {description}
+                {description.length > 0 &&
+                  description.length < descriptionFull.length && (
+                    <span className="text-gray-400">|</span>
+                  )}
               </motion.p>
             </div>
 
-            {/* Feature Pills */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.6 }}
-              className="flex flex-wrap gap-3"
-            >
-              {[
-                {
-                  icon: Shield,
-                  text: "Secure & Private",
-                  color: "from-blue-500 to-cyan-500",
-                },
-                {
-                  icon: Heart,
-                  text: "Patient-Centered",
-                  color: "from-pink-500 to-rose-500",
-                },
-                {
-                  icon: Sparkles,
-                  text: "AI-Powered",
-                  color: "from-purple-500 to-indigo-500",
-                },
-              ].map((feature, idx) => (
+            {/* Feature Pills with animation */}
+            <AnimatePresence>
+              {showStats && (
                 <motion.div
-                  key={idx}
-                  whileHover={{ scale: 1.05, y: -2 }}
-                  className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm shadow-lg border border-gray-200 dark:border-gray-700"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  transition={{ duration: 0.5 }}
+                  className="flex flex-wrap gap-3"
                 >
-                  <div
-                    className={`p-1.5 rounded-full bg-gradient-to-br ${feature.color}`}
-                  >
-                    <feature.icon className="w-4 h-4 text-white" />
-                  </div>
-                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {feature.text}
-                  </span>
+                  {[
+                    {
+                      icon: Shield,
+                      text: "Secure & Private",
+                      color: "from-blue-500 to-cyan-500",
+                    },
+                    {
+                      icon: Heart,
+                      text: "Patient-Centered",
+                      color: "from-pink-500 to-rose-500",
+                    },
+                    {
+                      icon: Sparkles,
+                      text: "AI-Powered",
+                      color: "from-purple-500 to-indigo-500",
+                    },
+                  ].map((feature, idx) => (
+                    <motion.div
+                      key={idx}
+                      initial={{ opacity: 0, scale: 0.8, y: 20 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      transition={{ delay: idx * 0.15, duration: 0.4 }}
+                      whileHover={{ scale: 1.05, y: -2 }}
+                      className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm shadow-lg border border-gray-200 dark:border-gray-700"
+                    >
+                      <div
+                        className={`p-1.5 rounded-full bg-gradient-to-br ${feature.color}`}
+                      >
+                        <feature.icon className="w-4 h-4 text-white" />
+                      </div>
+                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {feature.text}
+                      </span>
+                    </motion.div>
+                  ))}
                 </motion.div>
-              ))}
-            </motion.div>
+              )}
+            </AnimatePresence>
 
-            {/* Stats */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.7 }}
-              className="grid grid-cols-3 gap-6 pt-8"
-            >
-              {[
-                { value: "10K+", label: "Patients" },
-                { value: "500+", label: "Doctors" },
-                { value: "99.9%", label: "Uptime" },
-              ].map((stat, idx) => (
-                <div key={idx} className="text-center">
-                  <div className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-br from-[#0EA5C9] to-[#1494B5]">
-                    {stat.value}
-                  </div>
-                  <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                    {stat.label}
-                  </div>
-                </div>
-              ))}
-            </motion.div>
+            {/* Stats with counting animation */}
+            <AnimatePresence>
+              {showStats && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  transition={{ duration: 0.5, delay: 0.3 }}
+                  className="grid grid-cols-3 gap-6 pt-8"
+                >
+                  {[
+                    { value: 10000, label: "Patients", suffix: "+" },
+                    { value: 500, label: "Doctors", suffix: "+" },
+                    { value: 99.9, label: "Uptime", suffix: "%" },
+                  ].map((stat, idx) => (
+                    <motion.div
+                      key={idx}
+                      initial={{ opacity: 0, scale: 0.5 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.5 + idx * 0.1, type: "spring" }}
+                      className="text-center"
+                    >
+                      <div className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-br from-[#0EA5C9] to-[#1494B5]">
+                        {idx === 0
+                          ? `${(animatedStats[idx] / 1000).toFixed(
+                              animatedStats[idx] >= 10000 ? 0 : 1
+                            )}K${stat.suffix}`
+                          : idx === 1
+                          ? `${animatedStats[idx]}${stat.suffix}`
+                          : `${animatedStats[idx].toFixed(1)}${stat.suffix}`}
+                      </div>
+                      <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                        {stat.label}
+                      </div>
+                    </motion.div>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.div>
 
           {/* Right Side - Login Card */}
@@ -453,14 +569,18 @@ export default function LoginPage() {
                         className="pl-11 pr-11 h-12 border-gray-300 dark:border-gray-700 focus:border-[#1494B5] dark:focus:border-[#0EA5C9] focus:ring-[#1494B5] dark:focus:ring-[#0EA5C9] transition-all bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500"
                       />
                       <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 group-focus-within:text-[#1494B5] dark:group-focus-within:text-[#0EA5C9] transition-colors">
-                        <Lock className="h-5 w-5" />
+                        <ShieldCheck className="h-5 w-5" />
                       </div>
                       <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors"
                       >
-                        {showPassword ? "👁️" : "👁️‍🗨️"}
+                        {showPassword ? (
+                          <EyeOff className="h-5 w-5" />
+                        ) : (
+                          <Eye className="h-5 w-5" />
+                        )}
                       </button>
                     </div>
                   </motion.div>
@@ -517,34 +637,15 @@ export default function LoginPage() {
                     transition={{ delay: 0.8 }}
                     className="w-full space-y-3"
                   >
-                    <div className="relative">
-                      <div className="absolute inset-0 flex items-center">
-                        <div className="w-full border-t border-gray-200 dark:border-gray-700" />
-                      </div>
-                      <div className="relative flex justify-center text-xs">
-                        <span className="px-3 bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 font-medium">
-                          Demo Access
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="p-4 bg-gradient-to-br from-blue-50 to-cyan-50 dark:from-gray-800 dark:to-gray-800/50 rounded-xl border border-blue-100 dark:border-gray-700 space-y-2">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-600 dark:text-gray-400">
-                          Username:
-                        </span>
-                        <code className="px-2 py-1 bg-white dark:bg-gray-900 rounded text-[#1494B5] dark:text-[#0EA5C9] font-mono font-semibold">
-                          admin
-                        </code>
-                      </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-600 dark:text-gray-400">
-                          Password:
-                        </span>
-                        <code className="px-2 py-1 bg-white dark:bg-gray-900 rounded text-[#1494B5] dark:text-[#0EA5C9] font-mono font-semibold">
-                          admin123
-                        </code>
-                      </div>
+                    <div className="text-center text-sm text-gray-600 dark:text-gray-300">
+                      Don't you have a patient account?{" "}
+                      <button
+                        type="button"
+                        onClick={() => setLocation("/register")}
+                        className="font-medium text-[#1494B5] hover:underline"
+                      >
+                        Register here
+                      </button>
                     </div>
                   </motion.div>
                 </CardFooter>

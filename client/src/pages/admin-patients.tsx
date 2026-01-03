@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import {
   Card,
@@ -19,6 +19,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -45,6 +46,7 @@ import {
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { RemoteScannerPairing } from "@/components/remote-scanner-pairing";
 
 interface Patient {
   id: string;
@@ -62,18 +64,111 @@ interface Patient {
   isActive?: boolean;
 }
 
+interface RegistrationRequest {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  nic: string;
+  dateOfBirth?: string | null;
+  gender?: string | null;
+  contactInfo?: string | null;
+  address?: string | null;
+  bloodType?: string | null;
+  allergies?: string | null;
+  submittedAt: string;
+  status: string;
+}
+
 export default function AdminPatients() {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [genderFilter, setGenderFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
 
+  const [approveDialogOpen, setApproveDialogOpen] = useState(false);
+  const [selectedRequest, setSelectedRequest] =
+    useState<RegistrationRequest | null>(null);
+  const [approveRfid, setApproveRfid] = useState("");
+  const [approveHealthId, setApproveHealthId] = useState("");
+  const [rfidScanOpen, setRfidScanOpen] = useState(false);
+
   // Fetch patients (admin view - limited info only)
   const { data: patients, isLoading } = useQuery<Patient[]>({
     queryKey: ["/api/patients"],
   });
+
+  const { data: pendingRequests } = useQuery<RegistrationRequest[]>({
+    queryKey: ["/api/admin/patient-registrations", "pending"],
+    queryFn: async () => {
+      const res = await fetch(
+        "/api/admin/patient-registrations?status=pending",
+        {
+          credentials: "include",
+        }
+      );
+      if (!res.ok) throw new Error("Failed to fetch pending registrations");
+      return res.json();
+    },
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: async (payload: {
+      id: string;
+      rfid: string;
+      healthId?: string;
+    }) => {
+      const res = await fetch(
+        `/api/admin/patient-registrations/${payload.id}/approve`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            rfid: payload.rfid,
+            healthId: payload.healthId || undefined,
+          }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || "Approval failed");
+      return data;
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Approved",
+        description: data?.emailSent
+          ? "Patient approved and email sent"
+          : "Patient approved (email not configured)",
+      });
+      setApproveDialogOpen(false);
+      setSelectedRequest(null);
+      setApproveRfid("");
+      setApproveHealthId("");
+      queryClient.invalidateQueries({
+        queryKey: ["/api/admin/patient-registrations", "pending"],
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Error",
+        description: err?.message || "Failed to approve registration",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const openApprove = (req: RegistrationRequest) => {
+    setSelectedRequest(req);
+    setApproveDialogOpen(true);
+    setApproveRfid("");
+    setApproveHealthId("");
+    setRfidScanOpen(false);
+  };
 
   // Filter patients
   const filteredPatients = patients?.filter((patient) => {
@@ -207,6 +302,54 @@ export default function AdminPatients() {
         </AlertDescription>
       </Alert>
 
+      {/* Pending registrations */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Pending Patient Registrations</CardTitle>
+          <CardDescription>
+            Approve patient requests by assigning RFID (and optional Health ID)
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {!pendingRequests || pendingRequests.length === 0 ? (
+            <div className="text-sm text-muted-foreground">
+              No pending requests
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>NIC</TableHead>
+                  <TableHead>Submitted</TableHead>
+                  <TableHead className="text-right">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pendingRequests.map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell>{`${r.firstName} ${r.lastName}`}</TableCell>
+                    <TableCell>{r.email}</TableCell>
+                    <TableCell>{r.nic}</TableCell>
+                    <TableCell>
+                      {r.submittedAt
+                        ? new Date(r.submittedAt).toLocaleDateString()
+                        : "-"}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button size="sm" onClick={() => openApprove(r)}>
+                        Approve
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
@@ -263,6 +406,125 @@ export default function AdminPatients() {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog open={approveDialogOpen} onOpenChange={setApproveDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Approve Patient</DialogTitle>
+            <DialogDescription>
+              Assign RFID (required). Health ID is optional.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1 text-sm">
+              <div>
+                <span className="text-muted-foreground">Patient:</span>{" "}
+                {selectedRequest
+                  ? `${selectedRequest.firstName} ${selectedRequest.lastName}`
+                  : ""}
+              </div>
+              <div>
+                <span className="text-muted-foreground">NIC:</span>{" "}
+                {selectedRequest?.nic || ""}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Email:</span>{" "}
+                {selectedRequest?.email || ""}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Date of Birth:</span>{" "}
+                {selectedRequest?.dateOfBirth
+                  ? new Date(selectedRequest.dateOfBirth).toLocaleDateString()
+                  : "Not provided"}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Gender:</span>{" "}
+                {selectedRequest?.gender || "Not provided"}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Contact:</span>{" "}
+                {selectedRequest?.contactInfo || "Not provided"}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Address:</span>{" "}
+                {selectedRequest?.address || "Not provided"}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Blood Type:</span>{" "}
+                {selectedRequest?.bloodType || "Not provided"}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Allergies:</span>{" "}
+                {selectedRequest?.allergies || "Not provided"}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="approve-rfid">RFID</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="approve-rfid"
+                  value={approveRfid}
+                  onChange={(e) => setApproveRfid(e.target.value)}
+                  placeholder="Enter RFID or scan"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setRfidScanOpen(true)}
+                >
+                  Scan
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="approve-healthId">Health ID (optional)</Label>
+              <Input
+                id="approve-healthId"
+                value={approveHealthId}
+                onChange={(e) => setApproveHealthId(e.target.value)}
+                placeholder="Auto-generated if empty"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setApproveDialogOpen(false)}
+                disabled={approveMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  if (!selectedRequest) return;
+                  approveMutation.mutate({
+                    id: selectedRequest.id,
+                    rfid: approveRfid,
+                    healthId: approveHealthId,
+                  });
+                }}
+                disabled={
+                  approveMutation.isPending || approveRfid.trim().length < 3
+                }
+              >
+                {approveMutation.isPending ? "Approving..." : "Approve"}
+              </Button>
+            </div>
+
+            {rfidScanOpen && (
+              <RemoteScannerPairing
+                onScanSuccess={(qrData) => {
+                  setApproveRfid(String(qrData || "").trim());
+                  setRfidScanOpen(false);
+                }}
+                onClose={() => setRfidScanOpen(false)}
+              />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Patients Table */}
       <Card>

@@ -132,70 +132,10 @@ export function setupAuth(app: Express) {
 
   // Register endpoint
   app.post("/api/register", async (req, res) => {
-    try {
-      const {
-        username,
-        email,
-        password,
-        firstName,
-        lastName,
-        role = "patient",
-      } = req.body;
-
-      // Validate required fields
-      if (!username || !password) {
-        return res
-          .status(400)
-          .json({ message: "Username and password are required" });
-      }
-
-      // Check if username already exists
-      const existingUser = await db
-        .select()
-        .from(users)
-        .where(eq(users.username, username))
-        .limit(1);
-
-      if (existingUser.length > 0) {
-        return res.status(409).json({ message: "Username already exists" });
-      }
-
-      // Hash password
-      const hashedPassword = await bcrypt.hash(password, 10);
-
-      // Create user
-      const newUser = await db
-        .insert(users)
-        .values({
-          username,
-          email,
-          password: hashedPassword,
-          firstName,
-          lastName,
-          role,
-        })
-        .returning();
-
-      const { password: _, ...userWithoutPassword } = newUser[0];
-
-      // Auto-login after registration
-      req.logIn(userWithoutPassword, (err) => {
-        if (err) {
-          return res
-            .status(500)
-            .json({ message: "Registration successful but login failed" });
-        }
-        res.status(201).json({
-          message: "Registration successful",
-          user: userWithoutPassword,
-        });
-      });
-    } catch (error: any) {
-      console.error("Registration error:", error);
-      res
-        .status(500)
-        .json({ message: "Registration failed", error: error.message });
-    }
+    return res.status(403).json({
+      message:
+        "Self registration is disabled. Patients must register via the patient portal and wait for admin approval. Admins create users via the admin panel.",
+    });
   });
 
   // Logout endpoint
@@ -214,6 +154,63 @@ export function setupAuth(app: Express) {
       res.json({ user: req.user });
     } else {
       res.status(401).json({ message: "Not authenticated" });
+    }
+  });
+
+  // Change password (required on first login when mustChangePassword=true)
+  app.post("/api/auth/change-password", async (req: any, res) => {
+    try {
+      if (!req.isAuthenticated?.() || !req.user?.id) {
+        return res.status(401).json({ message: "Unauthorized - Please login" });
+      }
+
+      const { currentPassword, newPassword } = req.body || {};
+      if (!currentPassword || !newPassword) {
+        return res
+          .status(400)
+          .json({ message: "Current password and new password are required" });
+      }
+
+      if (typeof newPassword !== "string" || newPassword.length < 8) {
+        return res
+          .status(400)
+          .json({ message: "New password must be at least 8 characters" });
+      }
+
+      const userResults = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, req.user.id))
+        .limit(1);
+
+      const user = userResults[0];
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const ok = await bcrypt.compare(currentPassword, user.password);
+      if (!ok) {
+        return res
+          .status(401)
+          .json({ message: "Current password is incorrect" });
+      }
+
+      const hashed = await bcrypt.hash(newPassword, 10);
+      await db
+        .update(users)
+        .set({
+          password: hashed,
+          mustChangePassword: false,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, user.id));
+
+      return res.json({ message: "Password changed successfully" });
+    } catch (error: any) {
+      console.error("Change password error:", error);
+      return res
+        .status(500)
+        .json({ message: error?.message || "Failed to change password" });
     }
   });
 }

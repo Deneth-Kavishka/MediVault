@@ -12,6 +12,8 @@ import { useAuth } from "@/hooks/useAuth";
 import NotFound from "@/pages/not-found";
 import Landing from "@/pages/landing";
 import LoginPage from "@/pages/login";
+import PatientRegisterPage from "@/pages/patient-register";
+import ChangePasswordPage from "@/pages/change-password";
 import Dashboard from "@/pages/dashboard";
 import Appointments from "@/pages/appointments";
 import Prescriptions from "@/pages/prescriptions";
@@ -36,6 +38,9 @@ import SettingsPage from "@/pages/settings";
 import ContactPage from "@/pages/contact";
 import MobileScanner from "@/pages/mobile-scanner";
 import QRScannerPage from "@/pages/qr-scanner-page";
+import Privacy from "@/pages/privacy";
+import Terms from "@/pages/terms";
+import Accessibility from "@/pages/accessibility";
 import { useEffect } from "react";
 
 function Router() {
@@ -50,8 +55,31 @@ function Router() {
 
     console.log("Redirect effect:", { isAuthenticated, location });
 
+    // Force password change on first login
+    if (
+      isAuthenticated &&
+      user?.mustChangePassword &&
+      location !== "/change-password"
+    ) {
+      setLocation("/change-password");
+      return;
+    }
+
+    // Authenticated user finished password change -> leave change-password page
+    if (
+      isAuthenticated &&
+      !user?.mustChangePassword &&
+      location === "/change-password"
+    ) {
+      setLocation("/dashboard");
+      return;
+    }
+
     // Authenticated user on public pages -> redirect to dashboard
-    if (isAuthenticated && (location === "/" || location === "/login")) {
+    if (
+      isAuthenticated &&
+      (location === "/" || location === "/login" || location === "/register")
+    ) {
       console.log("Redirecting authenticated user to dashboard");
       setLocation("/dashboard");
       return;
@@ -60,6 +88,7 @@ function Router() {
     // Unauthenticated user on protected pages -> redirect to login
     const protectedRoutes = [
       "/dashboard",
+      "/change-password",
       "/appointments",
       "/prescriptions",
       "/medical-records",
@@ -101,10 +130,15 @@ function Router() {
       {/* Public routes */}
       <Route path="/" component={Landing} />
       <Route path="/login" component={LoginPage} />
+      <Route path="/register" component={PatientRegisterPage} />
       <Route path="/mobile-scanner" component={MobileScanner} />
       <Route path="/contact" component={ContactPage} />
+      <Route path="/privacy" component={Privacy} />
+      <Route path="/terms" component={Terms} />
+      <Route path="/accessibility" component={Accessibility} />
 
       {/* Protected routes */}
+      <Route path="/change-password" component={ChangePasswordPage} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/appointments" component={Appointments} />
       <Route path="/prescriptions" component={Prescriptions} />

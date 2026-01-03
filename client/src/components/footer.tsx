@@ -9,8 +9,19 @@ import {
   Linkedin,
   Instagram,
   Clock,
+  MessageCircle,
 } from "lucide-react";
 import { Link } from "wouter";
+import { useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import Privacy from "@/pages/privacy";
+import Terms from "@/pages/terms";
+import Accessibility from "@/pages/accessibility";
 
 interface SystemSettings {
   systemName: string;
@@ -22,6 +33,7 @@ interface SystemSettings {
   twitterUrl?: string;
   linkedinUrl?: string;
   instagramUrl?: string;
+  whatsappUrl?: string;
   workingHoursStart?: string;
   workingHoursEnd?: string;
   workingDays?: string;
@@ -33,12 +45,16 @@ export default function Footer() {
     retry: false,
   });
 
+  const [privacyOpen, setPrivacyOpen] = useState(false);
+  const [termsOpen, setTermsOpen] = useState(false);
+  const [accessibilityOpen, setAccessibilityOpen] = useState(false);
+
   const currentYear = new Date().getFullYear();
 
   return (
     <footer className="bg-card border-t border-border mt-auto">
-      <div className="container mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+      <div className="container mx-auto px-4 py-12">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {/* Organization Info */}
           <div className="space-y-4">
             <h3 className="text-lg font-semibold text-foreground">
@@ -56,7 +72,7 @@ export default function Footer() {
                   <Phone className="w-4 h-4 flex-shrink-0" />
                   <a
                     href={`tel:${settings.systemPhone}`}
-                    className="hover:text-primary"
+                    className="hover:text-primary transition-colors"
                   >
                     {settings.systemPhone}
                   </a>
@@ -67,7 +83,7 @@ export default function Footer() {
                   <Mail className="w-4 h-4 flex-shrink-0" />
                   <a
                     href={`mailto:${settings.systemEmail}`}
-                    className="hover:text-primary"
+                    className="hover:text-primary transition-colors"
                   >
                     {settings.systemEmail}
                   </a>
@@ -80,7 +96,7 @@ export default function Footer() {
                     href={settings.systemWebsite}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="hover:text-primary"
+                    className="hover:text-primary transition-colors"
                   >
                     Website
                   </a>
@@ -112,45 +128,11 @@ export default function Footer() {
                 </div>
               )}
               <div className="mt-3 p-3 bg-muted rounded-md">
-                <p className="text-xs">
+                <p className="text-xs font-medium">
                   <strong>Emergency Services:</strong> Available 24/7
                 </p>
               </div>
             </div>
-          </div>
-
-          {/* Quick Links */}
-          <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-foreground">
-              Quick Links
-            </h3>
-            <ul className="space-y-2 text-sm text-muted-foreground">
-              <li>
-                <Link href="/" className="hover:text-primary">
-                  Home
-                </Link>
-              </li>
-              <li>
-                <Link href="/find-doctors" className="hover:text-primary">
-                  Find Doctors
-                </Link>
-              </li>
-              <li>
-                <Link href="/appointments" className="hover:text-primary">
-                  Book Appointment
-                </Link>
-              </li>
-              <li>
-                <Link href="/contact" className="hover:text-primary">
-                  Contact Us
-                </Link>
-              </li>
-              <li>
-                <Link href="/login" className="hover:text-primary">
-                  Patient Portal
-                </Link>
-              </li>
-            </ul>
           </div>
 
           {/* Social Media */}
@@ -158,81 +140,115 @@ export default function Footer() {
             <h3 className="text-lg font-semibold text-foreground">
               Connect With Us
             </h3>
-            <div className="flex gap-3">
-              {settings?.facebookUrl && (
-                <a
-                  href={settings.facebookUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-10 h-10 rounded-full bg-muted hover:bg-primary hover:text-primary-foreground flex items-center justify-center transition-colors"
-                  aria-label="Facebook"
-                >
-                  <Facebook className="w-5 h-5" />
-                </a>
-              )}
-              {settings?.twitterUrl && (
-                <a
-                  href={settings.twitterUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-10 h-10 rounded-full bg-muted hover:bg-primary hover:text-primary-foreground flex items-center justify-center transition-colors"
-                  aria-label="Twitter"
-                >
-                  <Twitter className="w-5 h-5" />
-                </a>
-              )}
-              {settings?.linkedinUrl && (
-                <a
-                  href={settings.linkedinUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-10 h-10 rounded-full bg-muted hover:bg-primary hover:text-primary-foreground flex items-center justify-center transition-colors"
-                  aria-label="LinkedIn"
-                >
-                  <Linkedin className="w-5 h-5" />
-                </a>
-              )}
-              {settings?.instagramUrl && (
-                <a
-                  href={settings.instagramUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-10 h-10 rounded-full bg-muted hover:bg-primary hover:text-primary-foreground flex items-center justify-center transition-colors"
-                  aria-label="Instagram"
-                >
-                  <Instagram className="w-5 h-5" />
-                </a>
-              )}
-            </div>
-            <div className="mt-4 p-3 bg-muted rounded-md">
-              <p className="text-xs text-muted-foreground">
-                Your health, our priority. Quality care for everyone.
-              </p>
+            <p className="text-sm text-muted-foreground">
+              Your health, our priority. Quality care for everyone.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <a
+                href={settings?.facebookUrl || "https://facebook.com"}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-10 h-10 rounded-full bg-muted hover:bg-blue-600 hover:text-white flex items-center justify-center transition-all duration-200 hover:scale-110"
+                aria-label="Facebook"
+                title="Facebook"
+              >
+                <Facebook className="w-5 h-5" />
+              </a>
+              <a
+                href={settings?.twitterUrl || "https://twitter.com"}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-10 h-10 rounded-full bg-muted hover:bg-sky-500 hover:text-white flex items-center justify-center transition-all duration-200 hover:scale-110"
+                aria-label="Twitter"
+                title="Twitter"
+              >
+                <Twitter className="w-5 h-5" />
+              </a>
+              <a
+                href={settings?.linkedinUrl || "https://linkedin.com"}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-10 h-10 rounded-full bg-muted hover:bg-blue-700 hover:text-white flex items-center justify-center transition-all duration-200 hover:scale-110"
+                aria-label="LinkedIn"
+                title="LinkedIn"
+              >
+                <Linkedin className="w-5 h-5" />
+              </a>
+              <a
+                href={settings?.instagramUrl || "https://instagram.com"}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-10 h-10 rounded-full bg-muted hover:bg-gradient-to-br hover:from-purple-600 hover:via-pink-600 hover:to-orange-500 hover:text-white flex items-center justify-center transition-all duration-200 hover:scale-110"
+                aria-label="Instagram"
+                title="Instagram"
+              >
+                <Instagram className="w-5 h-5" />
+              </a>
+              <a
+                href={settings?.whatsappUrl || "https://wa.me/1234567890"}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-10 h-10 rounded-full bg-muted hover:bg-green-600 hover:text-white flex items-center justify-center transition-all duration-200 hover:scale-110"
+                aria-label="WhatsApp"
+                title="WhatsApp"
+              >
+                <MessageCircle className="w-5 h-5" />
+              </a>
             </div>
           </div>
         </div>
 
         {/* Bottom Bar */}
-        <div className="mt-8 pt-6 border-t border-border">
+        <div className="mt-10 pt-6 border-t border-border">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4 text-sm text-muted-foreground">
             <p>
               © {currentYear} {settings?.systemName || "MediVault Healthcare"}.
               All rights reserved.
             </p>
-            <div className="flex gap-4">
-              <Link href="/privacy" className="hover:text-primary">
+            <div className="flex flex-wrap justify-center gap-6">
+              <button
+                onClick={() => setPrivacyOpen(true)}
+                className="hover:text-primary transition-colors cursor-pointer"
+              >
                 Privacy Policy
-              </Link>
-              <Link href="/terms" className="hover:text-primary">
+              </button>
+              <button
+                onClick={() => setTermsOpen(true)}
+                className="hover:text-primary transition-colors cursor-pointer"
+              >
                 Terms of Service
-              </Link>
-              <Link href="/accessibility" className="hover:text-primary">
+              </button>
+              <button
+                onClick={() => setAccessibilityOpen(true)}
+                className="hover:text-primary transition-colors cursor-pointer"
+              >
                 Accessibility
-              </Link>
+              </button>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Privacy Policy Dialog */}
+      <Dialog open={privacyOpen} onOpenChange={setPrivacyOpen}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+          <Privacy />
+        </DialogContent>
+      </Dialog>
+
+      {/* Terms of Service Dialog */}
+      <Dialog open={termsOpen} onOpenChange={setTermsOpen}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+          <Terms />
+        </DialogContent>
+      </Dialog>
+
+      {/* Accessibility Dialog */}
+      <Dialog open={accessibilityOpen} onOpenChange={setAccessibilityOpen}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+          <Accessibility />
+        </DialogContent>
+      </Dialog>
     </footer>
   );
 }
