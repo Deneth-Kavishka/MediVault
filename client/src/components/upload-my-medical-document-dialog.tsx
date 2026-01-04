@@ -157,7 +157,9 @@ export default function UploadMyMedicalDocumentDialog({
         description: "Your medical document was uploaded successfully.",
       });
 
-      const key = patientDocumentsUrl || (patientId ? `/api/medical-documents/patient/${patientId}` : "");
+      const key =
+        patientDocumentsUrl ||
+        (patientId ? `/api/medical-documents/patient/${patientId}` : "");
       if (key) {
         queryClient.invalidateQueries({ queryKey: [key] });
       }
@@ -166,7 +168,11 @@ export default function UploadMyMedicalDocumentDialog({
       reset();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Upload failed";
-      toast({ title: "Upload Failed", description: message, variant: "destructive" });
+      toast({
+        title: "Upload Failed",
+        description: message,
+        variant: "destructive",
+      });
     } finally {
       setUploading(false);
     }
@@ -208,7 +214,9 @@ export default function UploadMyMedicalDocumentDialog({
                 <SelectItem value="lab_report">Lab Report</SelectItem>
                 <SelectItem value="prescription">Prescription</SelectItem>
                 <SelectItem value="imaging">Imaging</SelectItem>
-                <SelectItem value="discharge_summary">Discharge Summary</SelectItem>
+                <SelectItem value="discharge_summary">
+                  Discharge Summary
+                </SelectItem>
                 <SelectItem value="other">Other</SelectItem>
               </SelectContent>
             </Select>

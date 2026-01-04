@@ -729,7 +729,9 @@ export default function MedicalRecords() {
                     patientDocumentsUrl={patientDocumentsUrl}
                     disabled={!patientProfile?.id}
                   />
-                  <Badge variant="secondary">{patientDocuments.length} Document(s)</Badge>
+                  <Badge variant="secondary">
+                    {patientDocuments.length} Document(s)
+                  </Badge>
                 </div>
               </div>
             </CardHeader>
