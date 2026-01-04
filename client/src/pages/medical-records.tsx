@@ -42,6 +42,7 @@ import {
 import { format } from "date-fns";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import UploadMyMedicalDocumentDialog from "@/components/upload-my-medical-document-dialog";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -129,9 +130,7 @@ export default function MedicalRecords() {
       retry: false,
     });
 
-  const patientDocuments = (patientDocumentsRaw || []).filter(
-    (doc) => doc.uploadedByRole === "doctor" || Boolean(doc.doctorId)
-  );
+  const patientDocuments = patientDocumentsRaw || [];
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -721,12 +720,17 @@ export default function MedicalRecords() {
                     Medical Documents
                   </CardTitle>
                   <CardDescription>
-                    Documents uploaded by doctors for you
+                    Doctor uploads and your history uploads
                   </CardDescription>
                 </div>
-                <Badge variant="secondary" className="shrink-0">
-                  {patientDocuments.length} Document(s)
-                </Badge>
+                <div className="flex items-center gap-2 shrink-0">
+                  <UploadMyMedicalDocumentDialog
+                    patientId={patientProfile?.id}
+                    patientDocumentsUrl={patientDocumentsUrl}
+                    disabled={!patientProfile?.id}
+                  />
+                  <Badge variant="secondary">{patientDocuments.length} Document(s)</Badge>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
@@ -736,7 +740,7 @@ export default function MedicalRecords() {
                 </p>
               ) : patientDocuments.length === 0 ? (
                 <div className="text-center py-6 text-muted-foreground">
-                  No doctor-uploaded documents yet
+                  No medical documents yet
                 </div>
               ) : (
                 <div className="space-y-3">

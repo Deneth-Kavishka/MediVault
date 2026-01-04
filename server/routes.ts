@@ -4066,6 +4066,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .json({ message: "Only doctors and patients can upload documents" });
       }
 
+      // If a patient is uploading, they can only upload to their own patient profile.
+      if (user.role === "patient") {
+        const patient = await storage.getPatientByUserId(userId);
+        const bodyPatientId = String((req.body as any)?.patientId || "").trim();
+        if (!patient || !bodyPatientId || patient.id !== bodyPatientId) {
+          return res
+            .status(403)
+            .json({ message: "Access denied to upload for this patient" });
+        }
+      }
+
       let doctorId: string | undefined = (req.body as any)?.doctorId;
       if (user.role === "doctor") {
         const doctor = await storage.getDoctorByUserId(userId);
@@ -4073,6 +4084,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Doctor profile not found" });
         }
         doctorId = doctor.id;
+      } else {
+        // Patients cannot attach a doctorId to their uploads.
+        doctorId = undefined;
       }
 
       const documentData = {
@@ -4080,7 +4094,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         doctorId,
         uploadedBy: userId,
         uploadedByRole: user.role,
-        isPublic: user.role === "doctor" ? req.body.isPublic ?? true : false, // Doctor uploads are public by default
+        isPublic: user.role === "doctor" ? req.body.isPublic ?? true : false, // Patient uploads are always private
       };
 
       const document = await storage.createMedicalDocument(documentData);
