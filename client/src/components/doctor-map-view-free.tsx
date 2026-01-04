@@ -557,7 +557,7 @@ export default function DoctorMapViewFree({
                 Interactive Map Available
               </div>
               <p className="text-xs text-muted-foreground mt-4">
-                ✨ Powered by OpenStreetMap (100% Free)
+                Powered by OpenStreetMap (100% Free)
               </p>
             </CardContent>
           </Card>

@@ -95,6 +95,22 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState("general");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get("tab");
+    const allowedTabs = new Set([
+      "general",
+      "appointments",
+      "notifications",
+      "security",
+      "backup",
+    ]);
+
+    if (tab && allowedTabs.has(tab)) {
+      setActiveTab(tab);
+    }
+  }, []);
+
   // Fetch current settings
   const {
     data: settings,
@@ -109,7 +125,7 @@ export default function SettingsPage() {
   const [formData, setFormData] = useState<SystemSettings>({
     systemName: "MediVault Healthcare System",
     systemEmail: "admin@medivault.com",
-    systemPhone: "+1-234-567-8900",
+    systemPhone: "+94 76 914 6080",
     systemAddress: "123 Healthcare Ave, Medical City",
     systemWebsite: "",
     systemDescription: "",
@@ -119,7 +135,7 @@ export default function SettingsPage() {
     timezone: "UTC",
     currency: "USD",
     language: "en",
-    appointmentDuration: 30,
+    appointmentDuration: 5,
     appointmentSlotInterval: 15,
     maxAppointmentsPerDay: 20,
     workingHoursStart: "09:00",
@@ -360,7 +376,7 @@ export default function SettingsPage() {
                     id="systemPhone"
                     value={formData.systemPhone}
                     onChange={(e) => updateField("systemPhone", e.target.value)}
-                    placeholder="+1-234-567-8900"
+                    placeholder="+94 76 914 6080"
                   />
                 </div>
                 <div className="space-y-2">
@@ -371,7 +387,7 @@ export default function SettingsPage() {
                     onChange={(e) =>
                       updateField("emergencyContact", e.target.value)
                     }
-                    placeholder="+1-234-567-0911"
+                    placeholder="+94 76 914 6080"
                   />
                 </div>
               </div>
@@ -487,33 +503,14 @@ export default function SettingsPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="5">5 minutes</SelectItem>
+                      <SelectItem value="10">10 minutes</SelectItem>
                       <SelectItem value="15">15 minutes</SelectItem>
                       <SelectItem value="30">30 minutes</SelectItem>
                       <SelectItem value="45">45 minutes</SelectItem>
                       <SelectItem value="60">1 hour</SelectItem>
                       <SelectItem value="90">1.5 hours</SelectItem>
                       <SelectItem value="120">2 hours</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="appointmentSlotInterval">
-                    Time Slot Interval (minutes)
-                  </Label>
-                  <Select
-                    value={formData.appointmentSlotInterval.toString()}
-                    onValueChange={(value) =>
-                      updateField("appointmentSlotInterval", parseInt(value))
-                    }
-                  >
-                    <SelectTrigger id="appointmentSlotInterval">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="5">5 minutes</SelectItem>
-                      <SelectItem value="10">10 minutes</SelectItem>
-                      <SelectItem value="15">15 minutes</SelectItem>
-                      <SelectItem value="30">30 minutes</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

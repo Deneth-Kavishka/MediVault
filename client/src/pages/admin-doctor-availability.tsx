@@ -206,6 +206,71 @@ export default function AdminDoctorAvailability() {
     },
   });
 
+  // Approve deletion request (Admin)
+  const approveDeletion = useMutation({
+    mutationFn: async (id: string) => {
+      const response = await fetch(`/api/doctor-availability/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(error || "Failed to delete availability");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["admin-doctor-availability"],
+      });
+      toast({
+        title: "Deleted",
+        description: "Availability deleted after approval",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to delete availability",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Reject deletion request (Admin)
+  const rejectDeletion = useMutation({
+    mutationFn: async (id: string) => {
+      const response = await fetch(
+        `/api/doctor-availability/${id}/reject-deletion`,
+        {
+          method: "PATCH",
+          credentials: "include",
+        }
+      );
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(error || "Failed to reject deletion request");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["admin-doctor-availability"],
+      });
+      toast({
+        title: "Rejected",
+        description: "Deletion request rejected",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to reject deletion request",
+        variant: "destructive",
+      });
+    },
+  });
+
   // Fetch doctors data
   const { data: doctors } = useQuery<DoctorInfo[]>({
     queryKey: ["/api/doctors"],
@@ -271,6 +336,15 @@ export default function AdminDoctorAvailability() {
         return (
           <Badge variant="destructive" className="bg-red-600 text-white">
             Deleted
+          </Badge>
+        );
+      case "deletion_requested":
+        return (
+          <Badge
+            variant="outline"
+            className="border-orange-500 text-orange-600"
+          >
+            Deletion Requested
           </Badge>
         );
       default:
@@ -551,6 +625,14 @@ export default function AdminDoctorAvailability() {
                                 Reactivation Requested
                               </Badge>
                             )}
+                            {avail.status === "deletion_requested" && (
+                              <Badge
+                                variant="outline"
+                                className="border-orange-500 text-orange-600"
+                              >
+                                Deletion Requested
+                              </Badge>
+                            )}
                             {avail.status === "finished" && (
                               <div className="text-xs text-muted-foreground">
                                 Time elapsed
@@ -560,6 +642,54 @@ export default function AdminDoctorAvailability() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
+                            {avail.status === "deletion_requested" && (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => {
+                                    if (
+                                      window.confirm(
+                                        "Approve and permanently delete this availability?"
+                                      )
+                                    ) {
+                                      approveDeletion.mutate(avail.id);
+                                    }
+                                  }}
+                                  disabled={
+                                    approveDeletion.isPending ||
+                                    rejectDeletion.isPending
+                                  }
+                                >
+                                  <CheckCircle className="h-4 w-4 mr-2" />
+                                  {approveDeletion.isPending
+                                    ? "Deleting..."
+                                    : "Approve Delete"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => {
+                                    if (
+                                      window.confirm(
+                                        "Reject this deletion request?"
+                                      )
+                                    ) {
+                                      rejectDeletion.mutate(avail.id);
+                                    }
+                                  }}
+                                  disabled={
+                                    approveDeletion.isPending ||
+                                    rejectDeletion.isPending
+                                  }
+                                >
+                                  <XCircle className="h-4 w-4 mr-2" />
+                                  {rejectDeletion.isPending
+                                    ? "Rejecting..."
+                                    : "Reject"}
+                                </Button>
+                              </>
+                            )}
                             <Button
                               variant="ghost"
                               size="sm"
@@ -583,7 +713,8 @@ export default function AdminDoctorAvailability() {
                               disabled={
                                 toggleAvailability.isPending ||
                                 avail.status === "finished" ||
-                                avail.status === "deleted"
+                                avail.status === "deleted" ||
+                                avail.status === "deletion_requested"
                               }
                               className="scale-75"
                             />

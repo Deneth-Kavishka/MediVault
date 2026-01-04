@@ -24,6 +24,7 @@ A comprehensive, modern healthcare management system for Sri Lanka, featuring el
 ## ✨ Features
 
 ### For Patients
+
 - 📅 **Appointment Management** - Book, view, and manage appointments with doctors
 - 📋 **Medical Records** - Access complete medical history including diagnoses, vital signs, and notes
 - 💊 **Digital Prescriptions** - View and download prescriptions with QR codes
@@ -33,6 +34,7 @@ A comprehensive, modern healthcare management system for Sri Lanka, featuring el
 - 💬 **Secure Messaging** - Chat with healthcare providers
 
 ### For Doctors
+
 - 🔍 **Patient Search** - Quick search by NIC, Health ID, or name
 - 📅 **Appointment Calendar** - Manage appointments and schedules
 - 📝 **Medical Records** - Create and update patient diagnoses and vital signs
@@ -42,6 +44,7 @@ A comprehensive, modern healthcare management system for Sri Lanka, featuring el
 - 👥 **Patient Management** - View all patients and their medical histories
 
 ### For Pharmacists
+
 - 📱 **QR Code Scanner** - Verify and dispense prescriptions via QR code
 - 💊 **Inventory Management** - Track medicine stock levels
 - ⚠️ **Low Stock Alerts** - Automated notifications for reorder levels
@@ -49,6 +52,7 @@ A comprehensive, modern healthcare management system for Sri Lanka, featuring el
 - 🔄 **Stock Updates** - Real-time inventory updates
 
 ### For Lab Technicians
+
 - 🧪 **Test Management** - View assigned lab tests
 - 📊 **Result Upload** - Upload and record test results
 - ⚠️ **Abnormal Flagging** - Flag abnormal results for doctor attention
@@ -56,6 +60,7 @@ A comprehensive, modern healthcare management system for Sri Lanka, featuring el
 - 📈 **Test History** - Complete laboratory test history
 
 ### For Administrators
+
 - 👥 **User Management** - Create and manage all user accounts
 - 📊 **System Reports** - Generate comprehensive system reports
 - 📝 **Audit Logs** - View all system activities and actions
@@ -66,6 +71,7 @@ A comprehensive, modern healthcare management system for Sri Lanka, featuring el
 ## 🛠 Technology Stack
 
 ### Frontend
+
 - **React 18** - Modern UI framework
 - **TypeScript** - Type-safe development
 - **Vite** - Lightning-fast build tool
@@ -76,6 +82,7 @@ A comprehensive, modern healthcare management system for Sri Lanka, featuring el
 - **Zod** - Schema validation
 
 ### Backend
+
 - **Node.js 20+** - JavaScript runtime
 - **Express.js** - Web framework
 - **TypeScript** - Type safety
@@ -84,11 +91,13 @@ A comprehensive, modern healthcare management system for Sri Lanka, featuring el
 - **WebSockets** - Real-time messaging
 
 ### Database
+
 - **PostgreSQL 15+** - Relational database
 - **Drizzle ORM** - Type-safe database toolkit
 - **pg** - PostgreSQL client
 
 ### Development Tools
+
 - **ESLint** - Code linting
 - **Prettier** - Code formatting
 - **tsx** - TypeScript execution
@@ -192,6 +201,12 @@ DATABASE_URL=postgresql://medivault_user:your_secure_password@localhost:5432/med
 # Session Configuration (generate with: openssl rand -base64 32)
 SESSION_SECRET=your-super-secret-session-key-change-this-in-production
 
+# Gemini AI (required only if using the Patient AI Assistant)
+GEMINI_API_KEY=your-gemini-api-key
+
+# Optional: override Gemini model name if your project only enables certain models
+# GEMINI_MODEL=gemini-pro
+
 # Application Configuration
 NODE_ENV=development
 PORT=5000
@@ -220,6 +235,7 @@ npm run seed
 ```
 
 This populates the database with:
+
 - ✅ 9 sample users (admin, doctors, patients, pharmacist, lab technician)
 - ✅ 8 medicines with inventory
 - ✅ 5 appointments
@@ -242,31 +258,36 @@ The application will be available at **http://localhost:5000**
 Use these credentials to test different user roles:
 
 ### 👑 Administrator
+
 - **Username:** `admin`
 - **Password:** `password123`
 - **Access:** Full system access, user management, reports, audit logs
 
 ### 👨‍⚕️ Doctors
-| Username | Specialization | Password |
-|----------|---------------|----------|
-| `dr.silva` | Cardiology | `password123` |
-| `dr.fernando` | Pediatrics | `password123` |
-| `dr.perera` | General Medicine | `password123` |
+
+| Username      | Specialization   | Password      |
+| ------------- | ---------------- | ------------- |
+| `dr.silva`    | Cardiology       | `password123` |
+| `dr.fernando` | Pediatrics       | `password123` |
+| `dr.perera`   | General Medicine | `password123` |
 
 ### 🏥 Patients
-| Username | Details | Password |
-|----------|---------|----------|
-| `patient.john` | John Doe, O+ blood type | `password123` |
-| `patient.jane` | Jane Smith, A+ blood type | `password123` |
-| `patient.bob` | Bob Wilson, B+ blood type | `password123` |
+
+| Username        | Details                     | Password      |
+| --------------- | --------------------------- | ------------- |
+| `patient.john`  | John Doe, O+ blood type     | `password123` |
+| `patient.jane`  | Jane Smith, A+ blood type   | `password123` |
+| `patient.bob`   | Bob Wilson, B+ blood type   | `password123` |
 | `patient.alice` | Alice Brown, AB+ blood type | `password123` |
 
 ### 💊 Pharmacist
+
 - **Username:** `pharmacist.kumar`
 - **Password:** `password123`
 - **Access:** Prescription verification, inventory management
 
 ### 🔬 Lab Technician
+
 - **Username:** `labtech.sarah`
 - **Password:** `password123`
 - **Access:** Lab test management, result upload
@@ -405,6 +426,12 @@ GET    /api/messages/:userId      # Get chat with user
 POST   /api/messages              # Send message
 ```
 
+### AI Assistant Endpoints
+
+```http
+POST   /api/ai/patient-assistant  # Patient AI assistant (Gemini)
+```
+
 For complete API documentation, see the Postman collection in `/docs/postman_collection.json`
 
 ## 🧪 Testing
@@ -451,12 +478,14 @@ npm start
 NODE_ENV=production
 DATABASE_URL=postgresql://user:password@prod-host:5432/medivault
 SESSION_SECRET=<strong-random-secret>
+GEMINI_API_KEY=<your-gemini-api-key>
 PORT=5000
 ```
 
 ### Deployment Platforms
 
 #### Recommended Options:
+
 - **Render.com** - Easy deployment with PostgreSQL
 - **Railway.app** - Automatic deployment from GitHub
 - **DigitalOcean App Platform** - Scalable infrastructure
@@ -531,7 +560,8 @@ npm run seed
 
 **Problem:** Changes not reflecting in browser
 
-**Solution:** 
+**Solution:**
+
 1. Check if dev server is running
 2. Clear browser cache (Ctrl+Shift+R)
 3. Restart dev server
@@ -539,6 +569,7 @@ npm run seed
 ## 🔒 Security Considerations
 
 ### Authentication & Authorization
+
 - ✅ Passwords hashed with bcrypt (10 rounds)
 - ✅ Session-based authentication with PostgreSQL storage
 - ✅ Role-based access control on all endpoints
@@ -546,6 +577,7 @@ npm run seed
 - ✅ SQL injection prevention via Drizzle ORM
 
 ### Production Security Recommendations
+
 - [ ] Use HTTPS only (TLS 1.2+)
 - [ ] Store SESSION_SECRET in secure environment variables
 - [ ] Implement rate limiting on auth endpoints
@@ -558,6 +590,7 @@ npm run seed
 - [ ] Penetration testing before launch
 
 ### GDPR & Privacy Compliance
+
 - Patient data is encrypted at rest
 - Audit logs track all data access
 - Role-based access ensures data minimization

@@ -11,7 +11,11 @@ import {
   sendUserCreatedEmail,
   sendSensitiveChangeApprovedEmail,
   sendSensitiveChangeRejectedEmail,
+  sendAccountDeactivatedEmail,
+  sendAccountReactivatedEmail,
+  sendAppointmentCancelledEmail,
 } from "./email";
+import { generatePatientAssistantReply } from "./gemini";
 // Use local authentication
 import {
   setupAuth,
@@ -60,10 +64,66 @@ import {
   pharmacists,
   users,
   profileChangeRequests,
+  auditLogs,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, sql, and, or, gte, count, ne, isNull, desc } from "drizzle-orm";
+import {
+  eq,
+  sql,
+  and,
+  or,
+  gte,
+  lte,
+  count,
+  ne,
+  isNull,
+  desc,
+} from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+
+type RateLimitEntry = { windowStartMs: number; count: number };
+const patientAiRateLimit = new Map<string, RateLimitEntry>();
+
+function consumePatientAiToken(key: string): boolean {
+  // Simple in-memory limiter (per server instance): protect against accidental spam.
+  const WINDOW_MS = 60_000;
+  const MAX_PER_WINDOW = 8;
+
+  const now = Date.now();
+  const current = patientAiRateLimit.get(key);
+  if (!current || now - current.windowStartMs > WINDOW_MS) {
+    patientAiRateLimit.set(key, { windowStartMs: now, count: 1 });
+    return true;
+  }
+
+  if (current.count >= MAX_PER_WINDOW) return false;
+  current.count += 1;
+  return true;
+}
+
+function getClientIp(req: any): string | null {
+  const xForwardedFor = req.headers?.["x-forwarded-for"];
+  const fromHeader = Array.isArray(xForwardedFor)
+    ? xForwardedFor[0]
+    : typeof xForwardedFor === "string"
+    ? xForwardedFor
+    : null;
+
+  const ipRaw =
+    (fromHeader ? fromHeader.split(",")[0]?.trim() : null) ||
+    (typeof req.headers?.["x-real-ip"] === "string"
+      ? req.headers["x-real-ip"].trim()
+      : null) ||
+    (typeof req.ip === "string" ? req.ip : null) ||
+    (typeof req.socket?.remoteAddress === "string"
+      ? req.socket.remoteAddress
+      : null);
+
+  if (!ipRaw) return null;
+  const ip = ipRaw.replace(/^::ffff:/, "");
+  if (ip === "::1" || ip === "127.0.0.1") return ip;
+  return ip;
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
@@ -1680,6 +1740,180 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============================================================================
+  // AI ASSISTANT (PATIENT)
+  // ============================================================================
+  app.post(
+    "/api/ai/patient-assistant",
+    isAuthenticated,
+    hasRole("patient"),
+    async (req: any, res: Response) => {
+      try {
+        const userId = String(req.user?.id || "").trim();
+        if (!userId) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        if (!consumePatientAiToken(userId)) {
+          return res
+            .status(429)
+            .send(
+              "Too many AI Assistant requests. Please wait a minute and try again."
+            );
+        }
+
+        const message =
+          typeof req.body?.message === "string" ? req.body.message.trim() : "";
+        if (!message) {
+          return res.status(400).json({ message: "message is required" });
+        }
+
+        const allowMedicalRecords = req.body?.allowMedicalRecords === true;
+
+        const patient = await storage.getPatientByUserId(userId);
+        if (!patient) {
+          return res.status(404).json({ message: "Patient profile not found" });
+        }
+
+        let medicalSummaryText: string | null = null;
+        if (allowMedicalRecords) {
+          const records = await storage.getMedicalRecordsByPatient(patient.id);
+
+          const sorted = [...records].sort((a: any, b: any) => {
+            const at = a?.createdAt ? new Date(a.createdAt).getTime() : 0;
+            const bt = b?.createdAt ? new Date(b.createdAt).getTime() : 0;
+            return bt - at;
+          });
+
+          const take = sorted.slice(0, 10);
+          const lines: string[] = [];
+
+          if (patient.bloodType)
+            lines.push(`Blood group: ${patient.bloodType}`);
+          if (patient.allergies) lines.push(`Allergies: ${patient.allergies}`);
+
+          for (const r of take) {
+            const d = r?.createdAt ? new Date(r.createdAt).toISOString() : "";
+            lines.push(
+              [
+                d ? `Date: ${d}` : undefined,
+                r?.diagnosis ? `Diagnosis: ${r.diagnosis}` : undefined,
+                r?.symptoms ? `Symptoms: ${r.symptoms}` : undefined,
+                r?.notes ? `Notes: ${r.notes}` : undefined,
+                r?.vitalSigns ? `Vital signs: ${r.vitalSigns}` : undefined,
+              ]
+                .filter(Boolean)
+                .join("\n")
+            );
+            lines.push("---");
+          }
+
+          medicalSummaryText = lines.join("\n").trim();
+          if (medicalSummaryText.length > 8000) {
+            medicalSummaryText = medicalSummaryText.slice(0, 8000);
+          }
+        }
+
+        // Provide upcoming availability to help the assistant recommend doctors.
+        const now = new Date();
+        const availabilityRows = await db
+          .select({
+            availableDate: doctorAvailability.availableDate,
+            startTime: doctorAvailability.startTime,
+            endTime: doctorAvailability.endTime,
+            locationName: doctorAvailability.locationName,
+            hospitalType: doctorAvailability.hospitalType,
+            consultationFee: doctorAvailability.consultationFee,
+            maxPatients: doctorAvailability.maxPatients,
+            bookedCount: doctorAvailability.bookedCount,
+            doctorId: doctors.id,
+            specialization: doctors.specialization,
+            firstName: users.firstName,
+            lastName: users.lastName,
+          })
+          .from(doctorAvailability)
+          .leftJoin(doctors, eq(doctors.id, doctorAvailability.doctorId))
+          .leftJoin(users, eq(users.id, doctors.userId))
+          .where(
+            and(
+              eq(doctorAvailability.isActive, true),
+              eq(doctorAvailability.status, "active"),
+              gte(doctorAvailability.availableDate, now),
+              sql`${doctorAvailability.bookedCount} < ${doctorAvailability.maxPatients}`
+            )
+          )
+          .orderBy(doctorAvailability.availableDate)
+          .limit(40);
+
+        const availableDoctorsText = availabilityRows
+          .filter((r: any) => r.doctorId)
+          .slice(0, 30)
+          .map((r: any) => {
+            const name = [r.firstName, r.lastName].filter(Boolean).join(" ");
+            const dateIso = r.availableDate
+              ? new Date(r.availableDate).toISOString()
+              : "";
+            const fee =
+              r.consultationFee !== null && r.consultationFee !== undefined
+                ? String(r.consultationFee)
+                : null;
+
+            return [
+              `Date: ${dateIso}`,
+              `Time: ${r.startTime || ""} - ${r.endTime || ""}`.trim(),
+              `Doctor: ${name || "(unknown)"}`,
+              `Specialization: ${r.specialization || ""}`.trim(),
+              `Location: ${r.locationName || ""} (${
+                r.hospitalType || ""
+              })`.trim(),
+              fee ? `Fee: ${fee}` : undefined,
+              `Slots: ${Math.max(
+                0,
+                (r.maxPatients || 0) - (r.bookedCount || 0)
+              )} available`,
+            ]
+              .filter(Boolean)
+              .join(" | ");
+          })
+          .join("\n");
+
+        const answer = await generatePatientAssistantReply({
+          userMessage: message,
+          allowMedicalRecords,
+          medicalSummaryText,
+          availableDoctorsText,
+        });
+
+        return res.json({ answer });
+      } catch (error: any) {
+        console.error("AI assistant error:", error);
+        const msg = error?.message || "AI assistant failed";
+        const status =
+          typeof error?.status === "number"
+            ? error.status
+            : String(msg).includes("429") ||
+              String(msg).includes("RESOURCE_EXHAUSTED") ||
+              String(msg).includes("Too Many Requests")
+            ? 429
+            : null;
+
+        if (String(msg).includes("GEMINI_API_KEY")) {
+          return res.status(501).send(msg);
+        }
+
+        if (status === 429) {
+          return res
+            .status(429)
+            .send(
+              "Gemini API quota/rate limit exceeded for this API key. Please wait and try again. If it keeps happening, check your Google AI Studio / Google Cloud quotas or enable billing."
+            );
+        }
+
+        return res.status(500).send(msg);
+      }
+    }
+  );
+
   app.get("/api/patients/:id", isAuthenticated, async (req, res) => {
     try {
       const patient = await storage.getPatient(req.params.id);
@@ -1927,7 +2161,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (
             availDate < now &&
             avail.status !== "finished" &&
-            avail.status !== "deleted"
+            avail.status !== "deleted" &&
+            avail.status !== "deletion_requested"
           ) {
             await storage.updateDoctorAvailability(avail.id, {
               status: "finished",
@@ -1968,7 +2203,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             if (
               availDate < now &&
               avail.status !== "finished" &&
-              avail.status !== "deleted"
+              avail.status !== "deleted" &&
+              avail.status !== "deletion_requested"
             ) {
               await storage.updateDoctorAvailability(avail.id, {
                 status: "finished",
@@ -2294,6 +2530,145 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   );
 
+  // Request deletion (Doctor only) - requires admin approval
+  app.patch(
+    "/api/doctor-availability/:id/request-deletion",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+
+        if (user?.role !== "doctor") {
+          return res.status(403).json({
+            message: "Only doctors can request availability deletion",
+          });
+        }
+
+        const availability = await storage.getDoctorAvailability(req.params.id);
+        if (!availability) {
+          return res.status(404).json({ message: "Availability not found" });
+        }
+
+        const doctor = await storage.getDoctorByUserId(userId);
+        if (doctor?.id !== availability.doctorId) {
+          return res.status(403).json({
+            message: "You can only request deletion for your own availability",
+          });
+        }
+
+        // 6-hour rule (same safety constraint as previous delete flow)
+        const availabilityDateTime = new Date(
+          `${availability.availableDate}T${availability.startTime}`
+        );
+        const now = new Date();
+        const hoursDifference =
+          (availabilityDateTime.getTime() - now.getTime()) / (1000 * 60 * 60);
+
+        if (hoursDifference < 6) {
+          return res.status(400).json({
+            message:
+              "Cannot request deletion less than 6 hours before scheduled time",
+          });
+        }
+
+        const updated = await storage.updateDoctorAvailability(req.params.id, {
+          isActive: false,
+          status: "deletion_requested",
+          deactivatedBy: "doctor",
+          deactivatedAt: new Date(),
+          updatedAt: new Date(),
+        });
+
+        if (!updated) {
+          return res
+            .status(500)
+            .json({ message: "Failed to request deletion" });
+        }
+
+        // Notify admins
+        const admins = await storage.getAllUsers();
+        const adminUsers = admins.filter((u) => u.role === "admin");
+
+        for (const admin of adminUsers) {
+          await storage.createNotification({
+            recipientId: admin.id,
+            type: "system",
+            title: "Availability Deletion Request",
+            message: `Dr. ${user.firstName} ${user.lastName} requested to delete availability at ${availability.locationName}.`,
+            relatedEntityId: updated.id,
+          });
+        }
+
+        return res.json(updated);
+      } catch (error) {
+        console.error("Error requesting availability deletion:", error);
+        return res.status(500).json({ message: "Failed to request deletion" });
+      }
+    }
+  );
+
+  // Reject deletion request (Admin only)
+  app.patch(
+    "/api/doctor-availability/:id/reject-deletion",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+
+        if (user?.role !== "admin") {
+          return res.status(403).json({
+            message: "Only admins can reject availability deletion requests",
+          });
+        }
+
+        const availability = await storage.getDoctorAvailability(req.params.id);
+        if (!availability) {
+          return res.status(404).json({ message: "Availability not found" });
+        }
+
+        if (availability.status !== "deletion_requested") {
+          return res.status(400).json({
+            message:
+              "This availability does not have a pending deletion request",
+          });
+        }
+
+        const updated = await storage.updateDoctorAvailability(req.params.id, {
+          status: "inactive",
+          isActive: false,
+          updatedAt: new Date(),
+        });
+
+        if (!updated) {
+          return res
+            .status(500)
+            .json({ message: "Failed to reject deletion request" });
+        }
+
+        // Notify doctor
+        const doctor = await storage.getDoctor(availability.doctorId);
+        if (doctor?.userId) {
+          await storage.createNotification({
+            recipientId: doctor.userId,
+            type: "system",
+            title: "Availability Deletion Rejected",
+            message: `Your deletion request for availability at ${availability.locationName} was rejected by an admin.`,
+            relatedEntityId: availability.id,
+          });
+        }
+
+        return res.json(updated);
+      } catch (error) {
+        console.error("Error rejecting availability deletion:", error);
+        return res
+          .status(500)
+          .json({ message: "Failed to reject deletion request" });
+      }
+    }
+  );
+
   // Delete doctor availability (soft delete by doctor, hard delete by admin)
   app.delete(
     "/api/doctor-availability/:id",
@@ -2310,99 +2685,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Check permissions
         if (user?.role === "doctor") {
-          const doctor = await storage.getDoctorByUserId(userId);
-          if (doctor?.id !== availability.doctorId) {
-            return res.status(403).json({
-              message: "You can only delete your own availability",
-            });
-          }
-
-          // Doctors can only permanently delete if admin deactivated it
-          if (availability.isActive) {
-            return res.status(400).json({
-              message:
-                "Cannot delete active availability. Please contact admin.",
-            });
-          }
-
-          // Check 6-hour rule: doctor can only delete if more than 6 hours before start time
-          const availabilityDateTime = new Date(
-            `${availability.availableDate}T${availability.startTime}`
-          );
-          const now = new Date();
-          const hoursDifference =
-            (availabilityDateTime.getTime() - now.getTime()) / (1000 * 60 * 60);
-
-          if (hoursDifference < 6) {
-            return res.status(400).json({
-              message:
-                "Cannot delete availability less than 6 hours before scheduled time",
-            });
-          }
-
-          // Get all appointments for this availability
-          const allAppointments = await storage.getAllAppointments();
-          const affectedAppointments = allAppointments.filter(
-            (apt) =>
-              apt.availabilityId === availability.id &&
-              apt.status !== "cancelled" &&
-              apt.status !== "completed"
-          );
-
-          // Cancel all affected appointments
-          for (const appointment of affectedAppointments) {
-            await storage.updateAppointmentStatus(appointment.id, "cancelled");
-            await db
-              .update(appointments)
-              .set({
-                cancelledBy: "doctor",
-                cancellationReason: "Doctor not available",
-                cancelledAt: new Date(),
-                updatedAt: new Date(),
-              })
-              .where(eq(appointments.id, appointment.id));
-
-            // Notify each patient about cancellation
-            if (appointment.patientId) {
-              await storage.createNotification({
-                recipientId: appointment.patientId,
-                type: "appointment",
-                title: "Appointment Cancelled",
-                message: `Your appointment on ${new Date(
-                  appointment.appointmentDate
-                ).toLocaleDateString()} has been cancelled. Reason: Doctor not available`,
-                relatedEntityId: appointment.id,
-              });
-            }
-          }
-
-          // Mark as deleted (soft delete)
-          await storage.updateDoctorAvailability(req.params.id, {
-            status: "deleted",
-            deletedAt: new Date(),
-            deletedBy: "doctor",
-            updatedAt: new Date(),
-          });
-
-          // Notify admins about deletion with affected appointment count
-          const admins = await storage.getAllUsers();
-          const adminUsers = admins.filter((u) => u.role === "admin");
-
-          for (const admin of adminUsers) {
-            await storage.createNotification({
-              recipientId: admin.id,
-              type: "system",
-              title: "Availability Deleted by Doctor",
-              message: `Dr. ${user.firstName} ${user.lastName} permanently deleted availability at ${availability.locationName}. ${affectedAppointments.length} appointment(s) cancelled.`,
-              relatedEntityId: availability.id,
-            });
-          }
-
-          res.json({
-            message: "Availability deleted successfully",
-            cancelledAppointments: affectedAppointments.length,
+          return res.status(403).json({
+            message:
+              "Doctors cannot delete availability directly. Please request admin approval.",
           });
         } else if (user?.role === "admin") {
+          if (availability.status !== "deletion_requested") {
+            return res.status(403).json({
+              message:
+                "Admin can delete availability only after a doctor requests deletion",
+            });
+          }
+
           // Admin can hard delete - but first cancel all associated appointments
           const allAppointments = await storage.getAllAppointments();
           const affectedAppointments = allAppointments.filter(
@@ -2419,7 +2713,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               .update(appointments)
               .set({
                 cancelledBy: "admin",
-                cancellationReason: "Doctor not available",
+                cancellationReason:
+                  "Appointment cancelled because the doctor availability was deleted",
                 cancelledAt: new Date(),
                 updatedAt: new Date(),
               })
@@ -2427,15 +2722,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
             // Notify each patient about cancellation
             if (appointment.patientId) {
-              await storage.createNotification({
-                recipientId: appointment.patientId,
-                type: "appointment",
-                title: "Appointment Cancelled",
-                message: `Your appointment on ${new Date(
-                  appointment.appointmentDate
-                ).toLocaleDateString()} has been cancelled. Reason: Doctor not available`,
-                relatedEntityId: appointment.id,
-              });
+              const patient = await storage.getPatient(appointment.patientId);
+              const patientUser = patient?.userId
+                ? await storage.getUser(patient.userId)
+                : null;
+
+              const appointmentDateIso = new Date(
+                appointment.appointmentDate
+              ).toISOString();
+              const doctorName =
+                (appointment as any)?.doctorName ||
+                (appointment as any)?.doctor ||
+                null;
+
+              if (patientUser?.id) {
+                await storage.createNotification({
+                  recipientId: patientUser.id,
+                  type: "appointment",
+                  title: "Appointment Cancelled",
+                  message: `Your appointment on ${new Date(
+                    appointment.appointmentDate
+                  ).toLocaleDateString()} has been cancelled because the doctor availability was deleted.`,
+                  relatedEntityId: appointment.id,
+                });
+              }
+
+              // Email (best-effort)
+              if (patientUser?.email) {
+                const fullName = `${patientUser.firstName || ""} ${
+                  patientUser.lastName || ""
+                }`.trim();
+                try {
+                  await sendAppointmentCancelledEmail({
+                    to: patientUser.email,
+                    fullName: fullName || patientUser.username,
+                    appointmentDateIso,
+                    appointmentTime: (appointment as any)?.appointmentTime,
+                    doctorName,
+                    reason:
+                      "The doctor is no longer available at the selected time.",
+                  });
+                } catch (e) {
+                  console.warn(
+                    "Availability delete: appointment-cancel email threw:",
+                    e
+                  );
+                }
+              }
             }
           }
 
@@ -2499,24 +2832,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.id;
       const user = await storage.getUser(userId);
 
-      let appointments: any[] = [];
+      let appointmentsList: any[] = [];
       if (user?.role === "patient") {
         const patient = await storage.getPatientByUserId(userId);
         if (patient) {
-          appointments = await storage.getAppointmentsByPatient(patient.id);
+          appointmentsList = await storage.getAppointmentsByPatient(patient.id);
         }
       } else if (user?.role === "doctor") {
         const doctor = await storage.getDoctorByUserId(userId);
         if (doctor) {
-          appointments = await storage.getAppointmentsByDoctor(doctor.id);
+          appointmentsList = await storage.getAppointmentsByDoctor(doctor.id);
         }
       } else if (user?.role === "admin") {
         // Admin can see all appointments - already enriched from storage
-        appointments = await storage.getAllAppointments();
+        appointmentsList = await storage.getAllAppointments();
       }
 
       // Check if any appointments are linked to deleted availability and auto-cancel them
-      for (const appointment of appointments) {
+      for (const appointment of appointmentsList) {
         if (
           appointment.availabilityId &&
           appointment.status !== "cancelled" &&
@@ -2549,15 +2882,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Data is already enriched with JOINs in storage methods
       console.log(
-        `Fetched ${appointments.length} appointments for ${user?.role}`
+        `Fetched ${appointmentsList.length} appointments for ${user?.role}`
       );
-      if (appointments.length > 0) {
+      if (appointmentsList.length > 0) {
         console.log(`Sample appointment:`, {
-          id: appointments[0].id,
-          patientName: appointments[0].patientName,
-          doctorName: appointments[0].doctorName,
-          specialization: appointments[0].specialization,
-          status: appointments[0].status,
+          id: appointmentsList[0].id,
+          patientName: appointmentsList[0].patientName,
+          doctorName: appointmentsList[0].doctorName,
+          specialization: appointmentsList[0].specialization,
+          status: appointmentsList[0].status,
         });
       }
 
@@ -2568,7 +2901,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         Expires: "0",
       });
 
-      res.json(appointments);
+      res.json(appointmentsList);
     } catch (error) {
       console.error("Error fetching appointments:", error);
       res.status(500).json({ message: "Failed to fetch appointments" });
@@ -2584,18 +2917,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const user = await storage.getUser(userId);
         const { status, cancellationReason, cancelledBy } = req.body;
 
+        const currentAppointment = await storage.getAppointment(req.params.id);
+        if (!currentAppointment) {
+          return res.status(404).json({ message: "Appointment not found" });
+        }
+
         // Check permissions
-        // Admin can update any status
         // Patient can cancel their own appointments
         if (user?.role !== "admin") {
           if (status === "cancelled" && user?.role === "patient") {
             // Allow patient to cancel their own appointment
-            const appointment = await storage.getAppointment(req.params.id);
-            if (!appointment) {
-              return res.status(404).json({ message: "Appointment not found" });
-            }
             const patient = await storage.getPatientByUserId(userId);
-            if (patient?.id !== appointment.patientId) {
+            if (patient?.id !== currentAppointment.patientId) {
               return res.status(403).json({
                 message: "You can only cancel your own appointments",
               });
@@ -2607,9 +2940,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
 
-        const currentAppointment = await storage.getAppointment(req.params.id);
-        if (!currentAppointment) {
-          return res.status(404).json({ message: "Appointment not found" });
+        // Admin restrictions:
+        // - Admin cannot approve pending appointments
+        // - Admin can cancel only if doctor requested cancellation
+        if (user?.role === "admin") {
+          if (
+            status === "confirmed" &&
+            currentAppointment.status === "pending"
+          ) {
+            return res.status(403).json({
+              message: "Only the doctor can approve appointments",
+            });
+          }
+
+          if (
+            status === "cancelled" &&
+            currentAppointment.status !== "cancellation_requested"
+          ) {
+            return res.status(403).json({
+              message:
+                "Admin can cancel appointments only when the doctor requests cancellation",
+            });
+          }
         }
 
         // Update appointment with proper timestamps
@@ -2737,10 +3089,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const user = await storage.getUser(userId);
         const { appointmentTime, notes } = req.body;
 
-        // Only doctors and admins can approve
-        if (user?.role !== "doctor" && user?.role !== "admin") {
+        // Only doctors can approve
+        if (user?.role !== "doctor") {
           return res.status(403).json({
-            message: "Only doctors and admins can approve appointments",
+            message: "Only doctors can approve appointments",
           });
         }
 
@@ -2750,14 +3102,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Appointment not found" });
         }
 
-        // If doctor, verify they own this appointment
-        if (user?.role === "doctor") {
-          const doctor = await storage.getDoctorByUserId(userId);
-          if (doctor?.id !== appointment.doctorId) {
-            return res.status(403).json({
-              message: "You can only approve your own appointments",
-            });
-          }
+        // Verify doctor owns this appointment
+        const doctor = await storage.getDoctorByUserId(userId);
+        if (doctor?.id !== appointment.doctorId) {
+          return res.status(403).json({
+            message: "You can only approve your own appointments",
+          });
         }
 
         // Validate appointment time is provided
@@ -2900,6 +3250,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const doctor = await storage.getDoctorByUserId(userId);
         if (!doctor) {
           return res.status(404).json({ message: "Doctor profile not found" });
+        }
+
+        // Ensure a medical record exists for this completed appointment.
+        // Without this, the patient Medical Records tab remains empty even after consultations.
+        const existingMedicalRecord = await db
+          .select({ id: medicalRecords.id })
+          .from(medicalRecords)
+          .where(eq(medicalRecords.appointmentId, updated.id))
+          .limit(1);
+
+        if (!existingMedicalRecord[0]) {
+          const diagnosisFromReason = String(appointment.reason || "")
+            .trim()
+            .slice(0, 500);
+          const diagnosis = diagnosisFromReason || "Consultation";
+
+          await db.insert(medicalRecords).values({
+            patientId: appointment.patientId,
+            doctorId: doctor.id,
+            appointmentId: updated.id,
+            diagnosis,
+            symptoms: null,
+            notes:
+              typeof notes === "string" && notes.trim().length
+                ? notes.trim()
+                : null,
+            vitalSigns: null,
+          });
         }
 
         // Create prescription if requested
@@ -3059,6 +3437,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const appointment = await storage.getAppointment(req.params.id);
         if (!appointment) {
           return res.status(404).json({ message: "Appointment not found" });
+        }
+
+        // Admin can only reschedule after doctor approval (confirmed)
+        if (user?.role === "admin" && appointment.status !== "confirmed") {
+          return res.status(403).json({
+            message: "Admin can reschedule only after doctor approval",
+          });
         }
 
         // If doctor, verify they own this appointment
@@ -3469,7 +3854,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
   app.post("/api/medical-records", isDoctorOrAdmin, async (req, res) => {
     try {
-      const validatedData = insertMedicalRecordSchema.parse(req.body);
+      let doctorId = (req.body as any)?.doctorId;
+
+      // If a doctor is creating the record, always bind to their doctor profile
+      const userId = (req as any)?.user?.id;
+      const user = userId ? await storage.getUser(userId) : null;
+      if (user?.role === "doctor") {
+        const doctor = await storage.getDoctorByUserId(userId);
+        if (!doctor) {
+          return res.status(404).json({ message: "Doctor profile not found" });
+        }
+        doctorId = doctor.id;
+      }
+
+      const validatedData = insertMedicalRecordSchema.parse({
+        ...req.body,
+        doctorId,
+      });
       const record = await storage.createMedicalRecord(validatedData);
       res.status(201).json(record);
     } catch (error: any) {
@@ -3487,7 +3888,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let records: any[] = [];
       if (user?.role === "patient") {
-        const patient = await storage.getPatientByUserId(userId);
+        // Primary: patient profile linked directly to this user
+        let patient = await storage.getPatientByUserId(userId);
+
+        // Fallback: older data path may have missed patients.userId link.
+        // In that case, resolve patient via the approved registration NIC.
+        if (!patient) {
+          const regRows = await db
+            .select({ nic: patientRegistrationRequests.nic })
+            .from(patientRegistrationRequests)
+            .where(eq(patientRegistrationRequests.approvedUserId, userId))
+            .limit(1);
+          const reg = regRows[0];
+          if (reg?.nic) {
+            const patientRows = await db
+              .select()
+              .from(patients)
+              .where(eq(patients.nic, reg.nic))
+              .limit(1);
+            patient = patientRows[0];
+          }
+        }
         if (patient) {
           // Get medical records with doctor information including specialty
           const rawRecords = await db
@@ -3645,8 +4066,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .json({ message: "Only doctors and patients can upload documents" });
       }
 
+      let doctorId: string | undefined = (req.body as any)?.doctorId;
+      if (user.role === "doctor") {
+        const doctor = await storage.getDoctorByUserId(userId);
+        if (!doctor) {
+          return res.status(404).json({ message: "Doctor profile not found" });
+        }
+        doctorId = doctor.id;
+      }
+
       const documentData = {
         ...req.body,
+        doctorId,
         uploadedBy: userId,
         uploadedByRole: user.role,
         isPublic: user.role === "doctor" ? req.body.isPublic ?? true : false, // Doctor uploads are public by default
@@ -3673,6 +4104,235 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .json({ message: error.message || "Failed to upload document" });
     }
   });
+
+  // Upload medical document file (stores file on disk, returns metadata + relative path)
+  app.post(
+    "/api/medical-documents/upload-file",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+
+        if (!user) {
+          return res.status(401).json({ message: "User not found" });
+        }
+
+        // Validate that only doctors and patients can upload
+        if (!["doctor", "patient"].includes(user.role)) {
+          return res.status(403).json({
+            message: "Only doctors and patients can upload documents",
+          });
+        }
+
+        const multer = await import("multer");
+        const path = await import("path");
+        const fs = await import("fs");
+
+        const uploadsRoot = path.join(
+          process.cwd(),
+          "uploads",
+          "medical-documents"
+        );
+        if (!fs.existsSync(uploadsRoot)) {
+          fs.mkdirSync(uploadsRoot, { recursive: true });
+        }
+
+        const safeName = (name: string) => {
+          const base = path.basename(name || "document");
+          return base.replace(/[^a-zA-Z0-9._-]+/g, "_");
+        };
+
+        const allowedExt = new Set([
+          ".pdf",
+          ".png",
+          ".jpg",
+          ".jpeg",
+          ".doc",
+          ".docx",
+        ]);
+
+        const storageEngine = multer.default.diskStorage({
+          destination: (r: any, _file, cb) => {
+            const patientId = String(r.body?.patientId || "").trim();
+            if (!patientId) {
+              return cb(new Error("patientId is required"), "");
+            }
+
+            const folder = path.join(uploadsRoot, patientId);
+            if (!fs.existsSync(folder)) {
+              fs.mkdirSync(folder, { recursive: true });
+            }
+            cb(null, folder);
+          },
+          filename: (_req, file, cb) => {
+            const originalSafe = safeName(file.originalname || "document");
+            cb(null, `doc-${Date.now()}-${originalSafe}`);
+          },
+        });
+
+        const upload = multer.default({
+          storage: storageEngine,
+          limits: { fileSize: 25 * 1024 * 1024 },
+          fileFilter: (_req, file, cb) => {
+            const ext = path.extname(file.originalname || "").toLowerCase();
+            if (!allowedExt.has(ext)) {
+              return cb(
+                new Error(
+                  "Invalid file type. Allowed: pdf, png, jpg, jpeg, doc, docx"
+                )
+              );
+            }
+            cb(null, true);
+          },
+        });
+
+        upload.single("file")(req, res, async (err) => {
+          if (err) {
+            console.error("Medical document file upload error:", err);
+            return res
+              .status(400)
+              .json({ message: err.message || "Upload failed" });
+          }
+
+          const patientId = String(req.body?.patientId || "").trim();
+          if (!patientId) {
+            return res.status(400).json({ message: "patientId is required" });
+          }
+
+          // If a patient is uploading, they can only upload to their own patient profile.
+          if (user.role === "patient") {
+            const patient = await storage.getPatientByUserId(userId);
+            if (!patient || patient.id !== patientId) {
+              return res
+                .status(403)
+                .json({ message: "Access denied to upload for this patient" });
+            }
+          }
+
+          const file = req.file as any;
+          if (!file?.path) {
+            return res.status(400).json({ message: "No file provided" });
+          }
+
+          const relativePath = path
+            .relative(process.cwd(), file.path)
+            .split(path.sep)
+            .join(path.posix.sep);
+
+          const ext = path.extname(file.originalname || "").toLowerCase();
+          const fileType = ext ? ext.replace(/^\./, "") : "";
+
+          return res.json({
+            fileUrl: relativePath,
+            fileName: String(file.originalname || file.filename || "document"),
+            fileType:
+              fileType ||
+              String(file.mimetype || "")
+                .split("/")
+                .pop(),
+            fileSize: Number(file.size || 0) || undefined,
+          });
+        });
+      } catch (error: any) {
+        console.error("Medical document upload-file init error:", error);
+        return res.status(500).json({
+          message: error?.message || "Failed to initialize upload",
+        });
+      }
+    }
+  );
+
+  // Download a medical document file (secure)
+  app.get(
+    "/api/medical-documents/:id/file",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+        const { id } = req.params;
+
+        if (!user) {
+          return res.status(401).json({ message: "User not found" });
+        }
+
+        // Admin has no access
+        if (user.role === "admin") {
+          return res.status(403).json({
+            message: "Admins do not have access to medical documents",
+          });
+        }
+
+        const document = await storage.getMedicalDocument(id);
+        if (!document) {
+          return res.status(404).json({ message: "Document not found" });
+        }
+
+        // Patient can only access their own documents
+        if (user.role === "patient") {
+          const patient = await storage.getPatientByUserId(userId);
+          if (!patient || patient.id !== document.patientId) {
+            return res.status(403).json({ message: "Access denied" });
+          }
+
+          // Patients see only public documents (uploaded by doctors) and their own uploads
+          if (!document.isPublic && document.uploadedBy !== userId) {
+            return res.status(403).json({ message: "Access denied" });
+          }
+        }
+
+        // If fileUrl is external, redirect.
+        const fileUrl = String((document as any).fileUrl || "");
+        if (/^https?:\/\//i.test(fileUrl)) {
+          return res.redirect(fileUrl);
+        }
+
+        const path = await import("path");
+        const fs = await import("fs");
+
+        const rel = fileUrl.replace(/\\/g, "/");
+        const abs = path.resolve(process.cwd(), rel);
+        const uploadsRoot = path.resolve(process.cwd(), "uploads");
+
+        // Prevent path traversal: must stay within uploads folder.
+        if (!abs.startsWith(uploadsRoot + path.sep) && abs !== uploadsRoot) {
+          return res.status(400).json({ message: "Invalid document path" });
+        }
+
+        if (!fs.existsSync(abs)) {
+          return res.status(404).json({ message: "File not found" });
+        }
+
+        const download = String(req.query?.download || "") === "1";
+        if (download) {
+          const safeName = String(
+            (document as any).fileName || "document"
+          ).replace(/[\r\n]/g, " ");
+          res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="${safeName}"`
+          );
+        }
+
+        // Log access
+        await logAccess(
+          userId,
+          user.role,
+          document.patientId,
+          download ? "download" : "view",
+          "document",
+          document.id,
+          req
+        );
+
+        return res.sendFile(abs);
+      } catch (error) {
+        console.error("Error downloading medical document:", error);
+        return res.status(500).json({ message: "Failed to download document" });
+      }
+    }
+  );
 
   // Get medical documents for a patient (with access control)
   app.get(
@@ -4004,15 +4664,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { items, ...prescriptionData } = req.body;
 
+      // Bind doctorId to the authenticated doctor's profile (prevents mis-linking to userId)
+      const userId = (req as any)?.user?.id;
+      const user = userId ? await storage.getUser(userId) : null;
+      let doctorId = (prescriptionData as any)?.doctorId;
+      if (user?.role === "doctor") {
+        const doctor = await storage.getDoctorByUserId(userId);
+        if (!doctor) {
+          return res.status(404).json({ message: "Doctor profile not found" });
+        }
+        doctorId = doctor.id;
+      }
+
+      // Ensure expiryDate is consistent when validityDays is provided
+      const validityDays =
+        typeof (prescriptionData as any)?.validityDays === "number"
+          ? (prescriptionData as any).validityDays
+          : 90;
+      const dateIssued = (prescriptionData as any)?.dateIssued
+        ? new Date((prescriptionData as any).dateIssued)
+        : new Date();
+
+      const expiryDate = (prescriptionData as any)?.expiryDate
+        ? new Date((prescriptionData as any).expiryDate)
+        : (() => {
+            const d = new Date(dateIssued);
+            d.setDate(d.getDate() + validityDays);
+            return d;
+          })();
+
       // Generate custom prescription ID and QR code
       const customId = await generatePrescriptionId();
       const qrCode = generatePrescriptionQrCode();
 
       const validatedPrescription = insertPrescriptionSchema.parse({
         ...prescriptionData,
+        doctorId,
         id: customId,
         qrCode,
         status: "active",
+        dateIssued,
+        validityDays,
+        expiryDate,
       });
 
       const prescription = await storage.createPrescription(
@@ -4191,31 +4884,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Get all prescriptions issued by this doctor with patient info and items
-      const doctorPrescriptions = await db
+      const rawDoctorPrescriptions = await db
         .select({
-          id: sql`${prescriptions}.id`,
-          patientId: sql`${prescriptions}.patient_id`,
-          status: sql`${prescriptions}.status`,
-          issuedDate: sql`${prescriptions}.issued_date`,
-          validUntil: sql`${prescriptions}.valid_until`,
-          notes: sql`${prescriptions}.notes`,
-          qrCode: sql`${prescriptions}.qr_code`,
-          scannedCount: sql`${prescriptions}.scanned_count`,
-          lastScannedAt: sql`${prescriptions}.last_scanned_at`,
-          dispensedAt: sql`${prescriptions}.dispensed_at`,
-          patientName: sql`CONCAT(${sql.identifier(
-            "users"
-          )}.first_name, ' ', ${sql.identifier("users")}.last_name)`,
-          patientHealthId: sql`${patients}.health_id`,
+          id: prescriptions.id,
+          patientId: prescriptions.patientId,
+          doctorId: prescriptions.doctorId,
+          status: prescriptions.status,
+          issuedDate: prescriptions.dateIssued,
+          validUntil: prescriptions.expiryDate,
+          notes: prescriptions.notes,
+          qrCode: prescriptions.qrCode,
+          scannedCount: prescriptions.scannedCount,
+          lastScannedAt: prescriptions.lastScannedAt,
+          dispensedAt: prescriptions.dispensedAt,
+          dispensedBy: prescriptions.dispensedBy,
+          patientFirstName: users.firstName,
+          patientLastName: users.lastName,
+          patientHealthId: patients.healthId,
         })
         .from(prescriptions)
         .leftJoin(patients, eq(patients.id, prescriptions.patientId))
-        .leftJoin(
-          sql.identifier("users"),
-          sql`${sql.identifier("users")}.id = ${patients}.user_id`
-        )
+        .leftJoin(users, eq(users.id, patients.userId))
         .where(eq(prescriptions.doctorId, doctor.id))
-        .orderBy(sql`${prescriptions}.issued_date DESC`);
+        .orderBy(desc(prescriptions.dateIssued));
+
+      const doctorPrescriptions = rawDoctorPrescriptions.map((p) => ({
+        ...p,
+        status: getEffectivePrescriptionStatus(
+          p.status,
+          p.validUntil,
+          p.dispensedAt
+        ),
+        patientName:
+          p.patientFirstName && p.patientLastName
+            ? `${p.patientFirstName} ${p.patientLastName}`
+            : "Unknown Patient",
+        patientFirstName: undefined,
+        patientLastName: undefined,
+      }));
 
       // Get items for each prescription
       const prescriptionsWithItems = await Promise.all(
@@ -5409,20 +6115,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
   app.post("/api/lab-tests", isDoctorOrAdmin, async (req, res) => {
     try {
+      // If a doctor is creating the lab test, bind doctorId to their profile
+      const userId = (req as any)?.user?.id;
+      const user = userId ? await storage.getUser(userId) : null;
+      let doctorId = (req.body as any)?.doctorId;
+      if (user?.role === "doctor") {
+        const doctor = await storage.getDoctorByUserId(userId);
+        if (!doctor) {
+          return res.status(404).json({ message: "Doctor profile not found" });
+        }
+        doctorId = doctor.id;
+      }
+
       const validatedData = insertLabTestSchema.parse({
         ...req.body,
+        doctorId,
         status: "pending",
       });
       const labTest = await storage.createLabTest(validatedData);
 
       // Create notification for patient
-      await storage.createNotification({
-        recipientId: req.body.patientId,
-        type: "lab_result",
-        title: "Lab Test Ordered",
-        message: `A new ${req.body.testName} has been ordered for you`,
-        relatedEntityId: labTest.id,
-      });
+      const patient = await storage.getPatient(validatedData.patientId);
+      if (patient) {
+        await storage.createNotification({
+          recipientId: patient.userId,
+          type: "lab_result",
+          title: "Lab Test Ordered",
+          message: `A new ${validatedData.testName} has been ordered for you`,
+          relatedEntityId: labTest.id,
+        });
+      }
 
       res.status(201).json(labTest);
     } catch (error: any) {
@@ -8249,6 +8971,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
+
+      // Fetch help-center contact details (best-effort).
+      let supportEmail = "admin@medivault.com";
+      let supportPhone = "+94 76 914 6080";
+
+      const normalizePhone = (phoneRaw: unknown) => {
+        const fallback = "+94 76 914 6080";
+        const phone = typeof phoneRaw === "string" ? phoneRaw.trim() : "";
+        if (!phone) return fallback;
+        if (phone === "+1-234-567-8900") return fallback;
+        if (phone === "+1-234-567-0911") return fallback;
+        if (/^\+1-234-567-\d{4}$/.test(phone)) return fallback;
+        return phone;
+      };
+
+      try {
+        const settingsRows = await db.select().from(systemSettings).limit(1);
+        const s: any = settingsRows?.[0];
+        if (s?.systemEmail) supportEmail = String(s.systemEmail);
+        if (s?.systemPhone) supportPhone = normalizePhone(s.systemPhone);
+      } catch (e) {
+        console.warn("Deactivation: failed to load system settings:", e);
+      }
+
+      const message =
+        "Your account was deactivated due to some issues. " +
+        "If you want to reactivate, contact MediVault Help Center. " +
+        `Email: ${supportEmail} | Phone: ${supportPhone}`;
+
+      // In-app notification (best-effort)
+      try {
+        await storage.createNotification({
+          recipientId: user.id,
+          type: "system",
+          title: "Account Deactivated",
+          message,
+        } as any);
+      } catch (e) {
+        console.warn("Deactivation: notification create failed:", e);
+      }
+
+      // Email (best-effort)
+      try {
+        const to =
+          typeof (user as any)?.email === "string" ? user.email.trim() : "";
+        if (to) {
+          const fullName =
+            [
+              typeof (user as any)?.firstName === "string"
+                ? user.firstName
+                : "",
+              typeof (user as any)?.lastName === "string" ? user.lastName : "",
+            ]
+              .filter(Boolean)
+              .join(" ") || null;
+
+          await sendAccountDeactivatedEmail({
+            to,
+            fullName,
+            username: String((user as any)?.username || ""),
+            supportEmail,
+            supportPhone,
+          });
+        }
+      } catch (e) {
+        console.warn("Deactivation: email send failed:", e);
+      }
+
       res.json({ message: "User deactivated successfully", user });
     } catch (error) {
       console.error("Error deactivating user:", error);
@@ -8264,6 +9054,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
+
+      // Fetch help-center contact details (best-effort).
+      let supportEmail = "admin@medivault.com";
+      let supportPhone = "+94 76 914 6080";
+
+      const normalizePhone = (phoneRaw: unknown) => {
+        const fallback = "+94 76 914 6080";
+        const phone = typeof phoneRaw === "string" ? phoneRaw.trim() : "";
+        if (!phone) return fallback;
+        if (phone === "+1-234-567-8900") return fallback;
+        if (phone === "+1-234-567-0911") return fallback;
+        if (/^\+1-234-567-\d{4}$/.test(phone)) return fallback;
+        return phone;
+      };
+
+      try {
+        const settingsRows = await db.select().from(systemSettings).limit(1);
+        const s: any = settingsRows?.[0];
+        if (s?.systemEmail) supportEmail = String(s.systemEmail);
+        if (s?.systemPhone) supportPhone = normalizePhone(s.systemPhone);
+      } catch (e) {
+        console.warn("Reactivation: failed to load system settings:", e);
+      }
+
+      // Email (best-effort)
+      try {
+        const to =
+          typeof (user as any)?.email === "string" ? user.email.trim() : "";
+        if (to) {
+          const fullName =
+            [
+              typeof (user as any)?.firstName === "string"
+                ? user.firstName
+                : "",
+              typeof (user as any)?.lastName === "string" ? user.lastName : "",
+            ]
+              .filter(Boolean)
+              .join(" ") || null;
+
+          await sendAccountReactivatedEmail({
+            to,
+            fullName,
+            username: String((user as any)?.username || ""),
+            supportEmail,
+            supportPhone,
+          });
+        }
+      } catch (e) {
+        console.warn("Reactivation: email send failed:", e);
+      }
+
       res.json({ message: "User reactivated successfully", user });
     } catch (error) {
       console.error("Error reactivating user:", error);
@@ -8278,8 +9119,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Activity Timeline (last 10 actions)
   app.get("/api/admin/activity-timeline", isAdmin, async (req, res) => {
     try {
-      const logs = await storage.getAuditLogs(10);
-      res.json(logs);
+      const rawLimit = Number(req.query?.limit);
+      const limit = Number.isFinite(rawLimit)
+        ? Math.max(1, Math.min(5000, rawLimit))
+        : 10;
+
+      const actionRaw =
+        typeof req.query?.action === "string" ? req.query.action.trim() : "";
+      const action = actionRaw && actionRaw !== "all" ? actionRaw : null;
+
+      const fromRaw = typeof req.query?.from === "string" ? req.query.from : "";
+      const toRaw = typeof req.query?.to === "string" ? req.query.to : "";
+      const from = fromRaw ? new Date(fromRaw) : null;
+      const to = toRaw ? new Date(toRaw) : null;
+
+      const fromValid = from && !isNaN(from.getTime()) ? from : null;
+      const toValid = to && !isNaN(to.getTime()) ? to : null;
+
+      // If no filters, keep existing storage method (minimal behavior change).
+      const needsQuery = Boolean(
+        action || fromValid || toValid || limit !== 10
+      );
+
+      const logs = needsQuery
+        ? await (async () => {
+            const conditions: any[] = [];
+            if (action) conditions.push(eq(auditLogs.action, action));
+            if (fromValid) conditions.push(gte(auditLogs.createdAt, fromValid));
+            if (toValid) conditions.push(lte(auditLogs.createdAt, toValid));
+
+            const base = db.select().from(auditLogs);
+            const filtered = conditions.length
+              ? base.where(and(...conditions))
+              : base;
+
+            return await filtered
+              .orderBy(desc(auditLogs.createdAt))
+              .limit(limit);
+          })()
+        : await storage.getAuditLogs(10);
+
+      // Normalize shape for dashboard widgets (client historically expects `timestamp`).
+      res.json(
+        (logs || []).map((l: any) => ({
+          ...l,
+          timestamp: l?.createdAt ?? l?.timestamp ?? null,
+        }))
+      );
     } catch (error) {
       console.error("Error fetching activity timeline:", error);
       res.status(500).json({ message: "Failed to fetch activity timeline" });
@@ -8390,6 +9276,207 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Record System Traffic event (1 site load = 1 traffic)
+  // Accepts both authenticated and unauthenticated visitors.
+  app.post("/api/metrics/traffic", async (req: any, res) => {
+    try {
+      const userId = (req as any)?.user?.id as string | undefined;
+
+      const pathnameRaw =
+        typeof req.body?.pathname === "string" ? req.body.pathname : "";
+      const pathname = pathnameRaw.trim().slice(0, 512);
+      const ip = getClientIp(req);
+
+      await db.insert(auditLogs).values({
+        userId: userId ?? null,
+        action: "page_view",
+        entityType: "traffic",
+        details: pathname ? `pathname=${pathname}` : null,
+        ipAddress: ip,
+      } as any);
+
+      return res.json({ ok: true });
+    } catch (error) {
+      console.error("Error recording traffic:", error);
+      return res.status(500).json({ message: "Failed to record traffic" });
+    }
+  });
+
+  // Recent Visits (last 24 hours)
+  // Includes both registered users and unauthenticated visitors.
+  app.get("/api/admin/recent-visits", isAdmin, async (req, res) => {
+    try {
+      const rawLimit = Number(req.query?.limit);
+      const limit = Number.isFinite(rawLimit)
+        ? Math.max(1, Math.min(200, rawLimit))
+        : 50;
+
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+      const rows = await db
+        .select({
+          id: auditLogs.id,
+          userId: auditLogs.userId,
+          action: auditLogs.action,
+          details: auditLogs.details,
+          ipAddress: auditLogs.ipAddress,
+          createdAt: auditLogs.createdAt,
+          username: users.username,
+          email: users.email,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          role: users.role,
+        })
+        .from(auditLogs)
+        .leftJoin(users, eq(auditLogs.userId, users.id))
+        .where(
+          and(
+            eq(auditLogs.action, "page_view"),
+            gte(auditLogs.createdAt, since)
+          )
+        )
+        .orderBy(desc(auditLogs.createdAt))
+        .limit(limit);
+
+      const result = (rows || []).map((r: any) => {
+        const details = r?.details ? String(r.details) : "";
+        const m = details.match(/pathname=([^\s]+)/);
+        const pathname = m?.[1] ? String(m[1]) : null;
+
+        const hasUser = Boolean(r?.userId && (r?.username || r?.email));
+        return {
+          id: r.id,
+          timestamp: r.createdAt ?? null,
+          pathname,
+          user: hasUser
+            ? {
+                id: r.userId,
+                username: r.username ?? null,
+                email: r.email ?? null,
+                firstName: r.firstName ?? null,
+                lastName: r.lastName ?? null,
+                role: r.role ?? null,
+              }
+            : null,
+        };
+      });
+
+      return res.json(result);
+    } catch (error) {
+      console.error("Error fetching recent visits:", error);
+      return res.status(500).json({ message: "Failed to fetch recent visits" });
+    }
+  });
+
+  // System Traffic Chart
+  // Definition: how many times users loaded the site (page_view events).
+  // Supports period query param: daily | weekly | monthly | yearly (default daily)
+  app.get("/api/admin/system-usage-chart", isAdmin, async (req, res) => {
+    try {
+      const periodRaw = String(req.query.period ?? "daily");
+      const allowedPeriods = new Set(["daily", "weekly", "monthly", "yearly"]);
+      const period = allowedPeriods.has(periodRaw) ? periodRaw : "daily";
+
+      const end = new Date();
+      end.setHours(23, 59, 59, 999);
+
+      // Default lookback per period (kept simple and predictable)
+      const dailyDays = 30;
+      const weeklyWeeks = 12;
+      const monthlyMonths = 12;
+      const yearlyYears = 5;
+
+      const start = new Date(end);
+      start.setHours(0, 0, 0, 0);
+      if (period === "daily") {
+        start.setDate(start.getDate() - (dailyDays - 1));
+      } else if (period === "weekly") {
+        start.setDate(start.getDate() - (weeklyWeeks * 7 - 1));
+      } else if (period === "monthly") {
+        start.setMonth(start.getMonth() - (monthlyMonths - 1));
+        start.setDate(1);
+      } else {
+        start.setFullYear(start.getFullYear() - (yearlyYears - 1));
+        start.setMonth(0);
+        start.setDate(1);
+      }
+
+      // Pull a reasonably large slice of latest audit logs, then aggregate.
+      // (Keeps changes minimal without adding new storage methods.)
+      const logs = await storage.getAuditLogs(5000);
+
+      const buckets = new Map<string, number>();
+
+      const ensureBucket = (key: string) => {
+        if (!buckets.has(key)) buckets.set(key, 0);
+      };
+
+      // Pre-seed buckets so chart has consistent x-axis
+      if (period === "daily") {
+        for (let i = 0; i < dailyDays; i++) {
+          const d = new Date(start);
+          d.setDate(start.getDate() + i);
+          ensureBucket(d.toISOString().split("T")[0]);
+        }
+      } else if (period === "weekly") {
+        for (let i = 0; i < weeklyWeeks; i++) {
+          const d = new Date(start);
+          d.setDate(start.getDate() + i * 7);
+          ensureBucket(d.toISOString().split("T")[0]);
+        }
+      } else if (period === "monthly") {
+        for (let i = 0; i < monthlyMonths; i++) {
+          const d = new Date(start);
+          d.setMonth(start.getMonth() + i);
+          ensureBucket(d.toISOString().slice(0, 7));
+        }
+      } else {
+        for (let i = 0; i < yearlyYears; i++) {
+          const year = start.getFullYear() + i;
+          ensureBucket(String(year));
+        }
+      }
+
+      (logs || []).forEach((log: any) => {
+        if (!log?.createdAt) return;
+        if (log?.action !== "page_view") return;
+        const dt = new Date(log.createdAt);
+        if (isNaN(dt.getTime())) return;
+        if (dt < start || dt > end) return;
+
+        let key: string;
+        if (period === "daily") {
+          key = dt.toISOString().split("T")[0];
+        } else if (period === "weekly") {
+          // Bucket by week start (based on start seed + 7-day windows)
+          const diffDays = Math.floor(
+            (dt.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)
+          );
+          const weekIndex = Math.floor(diffDays / 7);
+          const weekStart = new Date(start);
+          weekStart.setDate(start.getDate() + weekIndex * 7);
+          key = weekStart.toISOString().split("T")[0];
+        } else if (period === "monthly") {
+          key = dt.toISOString().slice(0, 7);
+        } else {
+          key = String(dt.getFullYear());
+        }
+
+        ensureBucket(key);
+        buckets.set(key, (buckets.get(key) || 0) + 1);
+      });
+
+      const chartData = Array.from(buckets.entries())
+        .map(([bucket, traffic]) => ({ bucket, traffic }))
+        .sort((a, b) => a.bucket.localeCompare(b.bucket));
+
+      res.json(chartData);
+    } catch (error) {
+      console.error("Error fetching system usage chart:", error);
+      res.status(500).json({ message: "Failed to fetch system usage data" });
+    }
+  });
+
   // ============================================================================
   // SYSTEM SETTINGS ROUTES
   // ============================================================================
@@ -8405,7 +9492,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const defaultSettings = {
           systemName: "MediVault Healthcare",
           systemEmail: "admin@medivault.com",
-          systemPhone: "+1-234-567-8900",
+          systemPhone: "+94 76 914 6080",
           systemAddress: "123 Healthcare Ave, Medical City",
           systemWebsite: "",
           systemDescription:

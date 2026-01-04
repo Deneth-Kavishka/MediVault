@@ -68,6 +68,58 @@ import { format } from "date-fns";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
+const formatSriLankaDateTime = (
+  value: any,
+  options?: { withSeconds?: boolean }
+) => {
+  if (!value) return "N/A";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "N/A";
+
+  const withSeconds = options?.withSeconds ?? true;
+
+  return new Intl.DateTimeFormat("en-LK", {
+    timeZone: "Asia/Colombo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    ...(withSeconds ? { second: "2-digit" } : {}),
+    hour12: false,
+  }).format(date);
+};
+
+const SRI_LANKA_UTC_OFFSET_MINUTES = 5 * 60 + 30;
+
+const parseSriLankaDateInputToUtcRange = (
+  dateStr: string
+): { startUtcMs: number; endUtcMs: number } | null => {
+  // dateStr expected in YYYY-MM-DD from <input type="date" />
+  const m = /^\s*(\d{4})-(\d{2})-(\d{2})\s*$/.exec(dateStr);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day)
+  ) {
+    return null;
+  }
+  // Start of selected day in Sri Lanka time, expressed in UTC ms.
+  const startUtcMs =
+    Date.UTC(year, month - 1, day, 0, 0, 0, 0) -
+    SRI_LANKA_UTC_OFFSET_MINUTES * 60_000;
+  // End of selected day in Sri Lanka time (inclusive).
+  const endUtcMs =
+    Date.UTC(year, month - 1, day + 1, 0, 0, 0, 0) -
+    SRI_LANKA_UTC_OFFSET_MINUTES * 60_000 -
+    1;
+  return { startUtcMs, endUtcMs };
+};
+
 export default function ReportsPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -115,7 +167,7 @@ export default function ReportsPage() {
     isLoading: logsLoading,
     refetch: refetchLogs,
   } = useQuery<any[]>({
-    queryKey: ["/api/admin/activity-timeline"],
+    queryKey: ["/api/admin/activity-timeline?limit=5000"],
   });
 
   const handleRefreshAll = async () => {
@@ -154,7 +206,7 @@ export default function ReportsPage() {
       "IP Address",
     ];
     const rows = auditLogs.map((log: any) => [
-      new Date(log.createdAt).toLocaleString(),
+      formatSriLankaDateTime(log.createdAt),
       log.action,
       log.entityType || "system",
       log.userId || "N/A",
@@ -342,7 +394,7 @@ export default function ReportsPage() {
         const auditData = filteredLogs
           .slice(0, 20)
           .map((log: any) => [
-            format(new Date(log.createdAt), "MM/dd/yy HH:mm"),
+            formatSriLankaDateTime(log.createdAt, { withSeconds: false }),
             log.action,
             log.entityType || "system",
             log.userId?.slice(0, 8) || "System",
@@ -421,8 +473,17 @@ export default function ReportsPage() {
     auditLogs?.filter((log: any) => {
       const logDate = log.createdAt;
       if (!logDate) return false;
-      if (dateFrom && new Date(logDate) < new Date(dateFrom)) return false;
-      if (dateTo && new Date(logDate) > new Date(dateTo)) return false;
+      const createdAtMs = new Date(logDate).getTime();
+      if (Number.isNaN(createdAtMs)) return false;
+
+      if (dateFrom) {
+        const fromRange = parseSriLankaDateInputToUtcRange(dateFrom);
+        if (fromRange && createdAtMs < fromRange.startUtcMs) return false;
+      }
+      if (dateTo) {
+        const toRange = parseSriLankaDateInputToUtcRange(dateTo);
+        if (toRange && createdAtMs > toRange.endUtcMs) return false;
+      }
       if (
         filterAction !== "all" &&
         !log.action.toLowerCase().includes(filterAction.toLowerCase())
@@ -934,10 +995,7 @@ export default function ReportsPage() {
                       filteredLogs.map((log: any, index: number) => (
                         <TableRow key={log.id || index}>
                           <TableCell className="text-sm">
-                            {format(
-                              new Date(log.createdAt),
-                              "MMM dd, yyyy HH:mm:ss"
-                            )}
+                            {formatSriLankaDateTime(log.createdAt)}
                           </TableCell>
                           <TableCell className="font-medium">
                             {log.action}

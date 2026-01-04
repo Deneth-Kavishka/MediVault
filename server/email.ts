@@ -45,6 +45,31 @@ type LoginAlertEmail = {
   userAgent?: string | null;
 };
 
+type AccountDeactivatedEmail = {
+  to: string;
+  fullName?: string | null;
+  username: string;
+  supportEmail: string;
+  supportPhone: string;
+};
+
+type AccountReactivatedEmail = {
+  to: string;
+  fullName?: string | null;
+  username: string;
+  supportEmail: string;
+  supportPhone: string;
+};
+
+type AppointmentCancelledEmail = {
+  to: string;
+  fullName?: string | null;
+  appointmentDateIso: string;
+  appointmentTime?: string | null;
+  doctorName?: string | null;
+  reason: string;
+};
+
 function getSmtpConfig() {
   const host = process.env.SMTP_HOST?.trim();
   const portRaw = process.env.SMTP_PORT?.trim();
@@ -194,6 +219,215 @@ export async function sendUserCreatedEmail(payload: UserCreatedEmail) {
   } catch (err: any) {
     const message = err?.response || err?.message || String(err);
     console.error("User-created email send failed:", message);
+    return { sent: false, error: message };
+  }
+}
+
+export async function sendAccountDeactivatedEmail(
+  payload: AccountDeactivatedEmail
+) {
+  const smtp = getSmtpConfig();
+  if (!smtp) {
+    console.warn(
+      "SMTP not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM to enable emails."
+    );
+    return { sent: false, error: "SMTP not configured" };
+  }
+
+  const debugEmail =
+    process.env.DEBUG_EMAIL?.trim().toLowerCase() === "true" ||
+    process.env.DEBUG?.trim().toLowerCase() === "true";
+  if (debugEmail) {
+    console.log(
+      `[email] host=${smtp.host} port=${smtp.port} user=${smtp.user} from=${smtp.from} to=${payload.to}`
+    );
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.port === 465,
+    auth: {
+      user: smtp.user,
+      pass: smtp.pass,
+    },
+  });
+
+  const subject = "MediVault Account Deactivated";
+
+  const hello = payload.fullName?.trim()
+    ? `Hello ${payload.fullName.trim()},`
+    : "Hello,";
+
+  const lines = [
+    hello,
+    "",
+    "Your MediVault account was deactivated due to some issues.",
+    "",
+    `Username: ${payload.username}`,
+    "",
+    "If you want to reactivate your account, contact MediVault Help Center:",
+    `Email: ${payload.supportEmail}`,
+    `Phone: ${payload.supportPhone}`,
+    "",
+    "Thank you,",
+    "MediVault Admin",
+  ];
+
+  const text = lines.join("\n");
+
+  try {
+    await transporter.sendMail({
+      from: smtp.from,
+      to: payload.to,
+      subject,
+      text,
+    });
+    return { sent: true };
+  } catch (err: any) {
+    const message = err?.response || err?.message || String(err);
+    console.error("Account-deactivated email send failed:", message);
+    return { sent: false, error: message };
+  }
+}
+
+export async function sendAccountReactivatedEmail(
+  payload: AccountReactivatedEmail
+) {
+  const smtp = getSmtpConfig();
+  if (!smtp) {
+    console.warn(
+      "SMTP not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM to enable emails."
+    );
+    return { sent: false, error: "SMTP not configured" };
+  }
+
+  const debugEmail =
+    process.env.DEBUG_EMAIL?.trim().toLowerCase() === "true" ||
+    process.env.DEBUG?.trim().toLowerCase() === "true";
+  if (debugEmail) {
+    console.log(
+      `[email] host=${smtp.host} port=${smtp.port} user=${smtp.user} from=${smtp.from} to=${payload.to}`
+    );
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.port === 465,
+    auth: {
+      user: smtp.user,
+      pass: smtp.pass,
+    },
+  });
+
+  const subject = "MediVault Account Reactivated";
+
+  const hello = payload.fullName?.trim()
+    ? `Hello ${payload.fullName.trim()},`
+    : "Hello,";
+
+  const lines = [
+    hello,
+    "",
+    "Your MediVault account has been reactivated.",
+    "",
+    `Username: ${payload.username}`,
+    "",
+    "You can now log in to MediVault.",
+    "",
+    "If you have any issues, contact MediVault Help Center:",
+    `Email: ${payload.supportEmail}`,
+    `Phone: ${payload.supportPhone}`,
+    "",
+    "Thank you,",
+    "MediVault Admin",
+  ];
+
+  const text = lines.join("\n");
+
+  try {
+    await transporter.sendMail({
+      from: smtp.from,
+      to: payload.to,
+      subject,
+      text,
+    });
+    return { sent: true };
+  } catch (err: any) {
+    const message = err?.response || err?.message || String(err);
+    console.error("Account-reactivated email send failed:", message);
+    return { sent: false, error: message };
+  }
+}
+
+export async function sendAppointmentCancelledEmail(
+  payload: AppointmentCancelledEmail
+) {
+  const smtp = getSmtpConfig();
+  if (!smtp) {
+    console.warn(
+      "SMTP not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM to enable emails."
+    );
+    return { sent: false, error: "SMTP not configured" };
+  }
+
+  const debugEmail =
+    process.env.DEBUG_EMAIL?.trim().toLowerCase() === "true" ||
+    process.env.DEBUG?.trim().toLowerCase() === "true";
+  if (debugEmail) {
+    console.log(
+      `[email] host=${smtp.host} port=${smtp.port} user=${smtp.user} from=${smtp.from} to=${payload.to}`
+    );
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.port === 465,
+    auth: {
+      user: smtp.user,
+      pass: smtp.pass,
+    },
+  });
+
+  const subject = "MediVault Appointment Cancelled";
+
+  const hello = payload.fullName?.trim()
+    ? `Hello ${payload.fullName.trim()},`
+    : "Hello,";
+
+  const dateStr = new Date(payload.appointmentDateIso).toLocaleDateString();
+
+  const lines = [
+    hello,
+    "",
+    "Your MediVault appointment has been cancelled.",
+    "",
+    `Date: ${dateStr}`,
+    payload.appointmentTime ? `Time: ${payload.appointmentTime}` : undefined,
+    payload.doctorName ? `Doctor: ${payload.doctorName}` : undefined,
+    `Reason: ${payload.reason}`,
+    "",
+    "If you still need an appointment, please book again in MediVault.",
+    "",
+    "Thank you,",
+    "MediVault Admin",
+  ].filter(Boolean);
+
+  const text = lines.join("\n");
+
+  try {
+    await transporter.sendMail({
+      from: smtp.from,
+      to: payload.to,
+      subject,
+      text,
+    });
+    return { sent: true };
+  } catch (err: any) {
+    const message = err?.response || err?.message || String(err);
+    console.error("Appointment-cancelled email send failed:", message);
     return { sent: false, error: message };
   }
 }

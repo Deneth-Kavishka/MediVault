@@ -210,16 +210,28 @@ export default function DoctorAvailability() {
     },
   });
 
-  // Delete availability mutation
-  const deleteMutation = useMutation({
+  // Request delete approval mutation (Doctor -> Admin)
+  const requestDeleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      return await api.delete(`/api/doctor-availability/${id}`);
+      const response = await fetch(
+        `/api/doctor-availability/${id}/request-deletion`,
+        {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(error || "Failed to request deletion");
+      }
+      return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["doctor-availability"] });
       toast({
-        title: "Success",
-        description: "Availability deleted successfully",
+        title: "Request sent",
+        description: "Deletion request sent to admin for approval",
       });
       setDeleteDialogOpen(false);
       setSelectedAvailability(null);
@@ -227,7 +239,7 @@ export default function DoctorAvailability() {
     onError: (error: Error) => {
       toast({
         title: "Error",
-        description: error.message || "Failed to delete availability",
+        description: error.message || "Failed to request deletion",
         variant: "destructive",
       });
     },
@@ -365,7 +377,7 @@ export default function DoctorAvailability() {
 
   const handleDeleteConfirm = () => {
     if (!selectedAvailability) return;
-    deleteMutation.mutate(selectedAvailability.id);
+    requestDeleteMutation.mutate(selectedAvailability.id);
   };
 
   // Sort availability by date
@@ -736,9 +748,10 @@ export default function DoctorAvailability() {
                             variant="destructive"
                             onClick={() => handleDeleteClick(avail)}
                             className="text-xs h-7 px-2.5"
+                            disabled={avail.status === "deletion_requested"}
                           >
                             <Trash2 className="h-3 w-3 mr-1" />
-                            Delete
+                            Request Delete
                           </Button>
                         </div>
                       </div>
@@ -749,6 +762,7 @@ export default function DoctorAvailability() {
                 <div className="flex gap-2 pt-2">
                   {avail.status !== "deleted" &&
                     avail.status !== "finished" &&
+                    avail.status !== "deletion_requested" &&
                     !(avail.deactivatedBy === "admin" && !avail.isActive) && (
                       <>
                         <Button
@@ -768,7 +782,7 @@ export default function DoctorAvailability() {
                           className="flex-1"
                         >
                           <Trash2 className="h-4 w-4 mr-1 text-destructive" />
-                          Delete
+                          Request Delete
                         </Button>
                       </>
                     )}
@@ -1217,10 +1231,11 @@ export default function DoctorAvailability() {
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Availability?</AlertDialogTitle>
+            <AlertDialogTitle>Request Delete Availability?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will remove this availability schedule. Patients will no
-              longer be able to book appointments for this date and time.
+              This will send a deletion request to admin for approval. This
+              availability will be deactivated and patients will no longer be
+              able to book appointments for this date and time.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1228,9 +1243,9 @@ export default function DoctorAvailability() {
             <AlertDialogAction
               onClick={handleDeleteConfirm}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              disabled={deleteMutation.isPending}
+              disabled={requestDeleteMutation.isPending}
             >
-              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+              {requestDeleteMutation.isPending ? "Sending..." : "Send Request"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

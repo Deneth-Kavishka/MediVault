@@ -10,6 +10,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { LoadingScreen } from "@/components/loading-screen";
 import { useAuth } from "@/hooks/useAuth";
 import { ProfileMenu } from "@/components/profile-menu";
+import { PatientAiAssistantMenu } from "@/components/patient-ai-assistant-menu";
 import NotFound from "@/pages/not-found";
 import Landing from "@/pages/landing";
 import LoginPage from "@/pages/login";
@@ -45,6 +46,7 @@ import Terms from "@/pages/terms";
 import Accessibility from "@/pages/accessibility";
 import { useEffect, useRef } from "react";
 import { useToast } from "@/hooks/use-toast";
+import { trackTrafficOnce } from "@/lib/traffic";
 
 type MyChangeRequest = {
   id: string;
@@ -255,6 +257,11 @@ function Router() {
 
 function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth();
+  const [location] = useLocation();
+
+  useEffect(() => {
+    void trackTrafficOnce(location);
+  }, [location]);
 
   if (!isAuthenticated) {
     return <>{children}</>;
@@ -273,6 +280,7 @@ function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
           <header className="flex items-center justify-between h-16 px-4 border-b border-border bg-background shrink-0">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
             <div className="flex items-center gap-2">
+              <PatientAiAssistantMenu />
               <ProfileMenu />
               <ThemeToggle />
             </div>

@@ -6,10 +6,45 @@ import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
 import bcrypt from "bcryptjs";
 import { db } from "./db";
-import { users } from "@shared/schema";
+import { auditLogs, users } from "@shared/schema";
 import { eq, or, sql } from "drizzle-orm";
 import geoip from "geoip-lite";
 import { sendLoginAlertEmail } from "./email";
+
+function normalizeHelpCenterPhone(phoneRaw: string | undefined | null) {
+  const fallback = "+94 76 914 6080";
+  const phone = typeof phoneRaw === "string" ? phoneRaw.trim() : "";
+  if (!phone) return fallback;
+
+  // Guard against old placeholder/demo numbers.
+  if (phone === "+1-234-567-8900") return fallback;
+  if (phone === "+1-234-567-0911") return fallback;
+  if (/^\+1-234-567-\d{4}$/.test(phone)) return fallback;
+
+  return phone;
+}
+
+function getHelpCenterContact() {
+  const email =
+    process.env.MEDIVAULT_SUPPORT_EMAIL?.trim() ||
+    process.env.SUPPORT_EMAIL?.trim() ||
+    "admin@medivault.com";
+  const phone = normalizeHelpCenterPhone(
+    process.env.MEDIVAULT_SUPPORT_PHONE?.trim() ||
+      process.env.SUPPORT_PHONE?.trim() ||
+      null
+  );
+  return { email, phone };
+}
+
+function getDeactivatedAccountMessage() {
+  const contact = getHelpCenterContact();
+  return (
+    "Your account was deactivated due to some issues. " +
+    "If you want to reactivate, contact MediVault Help Center. " +
+    `Email: ${contact.email} | Phone: ${contact.phone}`
+  );
+}
 
 function getClientIp(req: any): string | null {
   const xForwardedFor = req.headers?.["x-forwarded-for"];
@@ -110,8 +145,7 @@ export function setupAuth(app: Express) {
         // Check if user is active
         if (!user.isActive) {
           return done(null, false, {
-            message:
-              "This account has been deactivated. Please contact an administrator.",
+            message: getDeactivatedAccountMessage(),
           });
         }
 
@@ -176,6 +210,30 @@ export function setupAuth(app: Express) {
           return res.status(500).json({ message: "Login error" });
         }
 
+        // Best-effort audit log (do not block login).
+        try {
+          const ip = getClientIp(req);
+          const userAgent =
+            typeof req.headers?.["user-agent"] === "string"
+              ? req.headers["user-agent"]
+              : null;
+
+          void db
+            .insert(auditLogs)
+            .values({
+              userId: user.id,
+              action: "login",
+              entityType: "auth",
+              details: userAgent ? `userAgent=${userAgent}` : null,
+              ipAddress: ip,
+            } as any)
+            .catch((e) => {
+              console.warn("Login audit log insert failed:", e);
+            });
+        } catch (auditErr) {
+          console.warn("Login audit log failed:", auditErr);
+        }
+
         // Best-effort login alert email (do not block login).
         try {
           const to = typeof user.email === "string" ? user.email.trim() : "";
@@ -221,6 +279,27 @@ export function setupAuth(app: Express) {
 
   // Logout endpoint
   app.post("/api/logout", (req, res) => {
+    // Best-effort audit log before session is cleared.
+    try {
+      const userId = (req as any)?.user?.id;
+      if (userId) {
+        const ip = getClientIp(req);
+        void db
+          .insert(auditLogs)
+          .values({
+            userId,
+            action: "logout",
+            entityType: "auth",
+            ipAddress: ip,
+          } as any)
+          .catch((e) => {
+            console.warn("Logout audit log insert failed:", e);
+          });
+      }
+    } catch (auditErr) {
+      console.warn("Logout audit log failed:", auditErr);
+    }
+
     req.logout((err) => {
       if (err) {
         return res.status(500).json({ message: "Logout error" });
@@ -231,11 +310,32 @@ export function setupAuth(app: Express) {
 
   // Get current user endpoint
   app.get("/api/auth/user", (req, res) => {
-    if (req.isAuthenticated()) {
-      res.json({ user: req.user });
-    } else {
-      res.status(401).json({ message: "Not authenticated" });
+    if (!req.isAuthenticated()) {
+      return res.status(401).json({ message: "Not authenticated" });
     }
+
+    // If the account is deactivated while logged in, force logout with a clear message.
+    const u: any = (req as any).user;
+    if (u && u.isActive === false) {
+      const msg = getDeactivatedAccountMessage();
+
+      try {
+        req.logout(() => {
+          try {
+            (req as any).session?.destroy?.(() => {
+              return res.status(403).json({ message: msg });
+            });
+          } catch {
+            return res.status(403).json({ message: msg });
+          }
+        });
+      } catch {
+        return res.status(403).json({ message: msg });
+      }
+      return;
+    }
+
+    return res.json({ user: req.user });
   });
 
   // Change password (required on first login when mustChangePassword=true)
@@ -298,10 +398,30 @@ export function setupAuth(app: Express) {
 
 // Authentication middleware
 export const isAuthenticated: RequestHandler = (req, res, next) => {
-  if (req.isAuthenticated()) {
-    return next();
+  if (!req.isAuthenticated()) {
+    return res.status(401).json({ message: "Unauthorized - Please login" });
   }
-  res.status(401).json({ message: "Unauthorized - Please login" });
+
+  const u: any = (req as any).user;
+  if (u && u.isActive === false) {
+    const msg = getDeactivatedAccountMessage();
+    try {
+      req.logout(() => {
+        try {
+          (req as any).session?.destroy?.(() => {
+            return res.status(403).json({ message: msg });
+          });
+        } catch {
+          return res.status(403).json({ message: msg });
+        }
+      });
+    } catch {
+      return res.status(403).json({ message: msg });
+    }
+    return;
+  }
+
+  return next();
 };
 
 // Role-based authorization middleware
@@ -309,6 +429,24 @@ export const hasRole = (...allowedRoles: string[]): RequestHandler => {
   return (req: any, res, next) => {
     if (!req.isAuthenticated()) {
       return res.status(401).json({ message: "Unauthorized - Please login" });
+    }
+
+    if (req.user && req.user.isActive === false) {
+      const msg = getDeactivatedAccountMessage();
+      try {
+        req.logout(() => {
+          try {
+            req.session?.destroy?.(() => {
+              return res.status(403).json({ message: msg });
+            });
+          } catch {
+            return res.status(403).json({ message: msg });
+          }
+        });
+      } catch {
+        return res.status(403).json({ message: msg });
+      }
+      return;
     }
 
     const userRole = req.user?.role;

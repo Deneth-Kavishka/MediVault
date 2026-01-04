@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { useLocation } from "wouter";
 import {
   Card,
   CardContent,
@@ -110,6 +111,8 @@ interface Appointment {
 export default function AdminAppointments() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [location] = useLocation();
+  const didAutoOpenRef = useRef(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
@@ -133,6 +136,25 @@ export default function AdminAppointments() {
   const { data: appointments, isLoading } = useQuery<Appointment[]>({
     queryKey: ["/api/appointments"],
   });
+
+  // If navigated from the Admin Dashboard Pending Appointments widget,
+  // open the matching appointment in the details dialog.
+  useEffect(() => {
+    if (didAutoOpenRef.current) return;
+    if (!appointments || appointments.length === 0) return;
+
+    const qs = location.includes("?") ? location.split("?")[1] : "";
+    const params = new URLSearchParams(qs);
+    const targetId = params.get("appointmentId");
+    if (!targetId) return;
+
+    const match = appointments.find((a) => a.id === targetId);
+    if (!match) return;
+
+    didAutoOpenRef.current = true;
+    setSelectedAppointment(match);
+    setDetailsDialogOpen(true);
+  }, [appointments, location]);
 
   // Update appointment mutation
   const updateAppointmentMutation = useMutation({
@@ -212,13 +234,6 @@ export default function AdminAppointments() {
   const handleViewDetails = (appointment: Appointment) => {
     setSelectedAppointment(appointment);
     setDetailsDialogOpen(true);
-  };
-
-  const handleApprove = async (appointment: Appointment) => {
-    await updateAppointmentMutation.mutateAsync({
-      id: appointment.id,
-      data: { status: "confirmed" },
-    });
   };
 
   const handleApproveCancellation = async (appointment: Appointment) => {
@@ -625,7 +640,7 @@ export default function AdminAppointments() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Date & Time</TableHead>
+                  <TableHead>Appointment Date</TableHead>
                   <TableHead>Patient</TableHead>
                   <TableHead>Doctor</TableHead>
                   <TableHead>Specialization</TableHead>
@@ -727,14 +742,6 @@ export default function AdminAppointments() {
                             >
                               View Details
                             </DropdownMenuItem>
-                            {appointment.status === "pending" && (
-                              <DropdownMenuItem
-                                onClick={() => handleApprove(appointment)}
-                              >
-                                <CheckCircle2 className="h-4 w-4 mr-2" />
-                                Approve
-                              </DropdownMenuItem>
-                            )}
                             {appointment.status === "confirmed" && (
                               <DropdownMenuItem
                                 onClick={() => handleComplete(appointment)}
@@ -766,32 +773,17 @@ export default function AdminAppointments() {
                                 </DropdownMenuItem>
                               </>
                             )}
-                            {appointment.status !== "cancelled" &&
-                              appointment.status !== "completed" &&
-                              appointment.status !==
-                                "cancellation_requested" && (
-                                <>
-                                  <DropdownMenuItem
-                                    onClick={() => {
-                                      setSelectedAppointment(appointment);
-                                      setRescheduleDialogOpen(true);
-                                    }}
-                                  >
-                                    <CalendarIcon className="h-4 w-4 mr-2" />
-                                    Reschedule
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    onClick={() => {
-                                      setSelectedAppointment(appointment);
-                                      setCancelDialogOpen(true);
-                                    }}
-                                    className="text-destructive"
-                                  >
-                                    <XCircle className="h-4 w-4 mr-2" />
-                                    Cancel
-                                  </DropdownMenuItem>
-                                </>
-                              )}
+                            {appointment.status === "confirmed" && (
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setSelectedAppointment(appointment);
+                                  setRescheduleDialogOpen(true);
+                                }}
+                              >
+                                <CalendarIcon className="h-4 w-4 mr-2" />
+                                Reschedule
+                              </DropdownMenuItem>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TableCell>

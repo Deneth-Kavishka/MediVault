@@ -53,7 +53,7 @@ INSERT INTO system_settings (
 SELECT 
     'MediVault Healthcare',
     'admin@medivault.com',
-    '+1-234-567-8900',
+    '+94 76 914 6080',
     '123 Healthcare Ave, Medical City',
     30,
     15,

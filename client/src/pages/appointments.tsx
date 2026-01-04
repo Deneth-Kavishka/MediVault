@@ -20,6 +20,7 @@ import {
   Search,
   SlidersHorizontal,
 } from "lucide-react";
+import EmergencyNoAppointmentDialogButton from "@/components/emergency-no-appointment-dialog";
 import {
   Dialog,
   DialogContent,
@@ -115,6 +116,7 @@ export default function Appointments() {
         </div>
 
         <div className="flex gap-3">
+          {user?.role === "doctor" && <EmergencyNoAppointmentDialogButton />}
           {user?.role === "admin" && (
             <Button
               variant="outline"
@@ -339,9 +341,6 @@ function AppointmentsList() {
     from: "",
     to: "",
   });
-  const [sortBy, setSortBy] = useState<"booking" | "appointment">(
-    "appointment"
-  );
 
   const [approveDialog, setApproveDialog] = useState<{
     open: boolean;
@@ -460,15 +459,11 @@ function AppointmentsList() {
 
   // Sort appointments - latest dates first
   const sortedAppointments = [...filteredAppointments].sort((a, b) => {
-    if (sortBy === "booking") {
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    } else {
-      // Appointment date - latest first
-      return (
-        new Date(b.appointmentDate).getTime() -
-        new Date(a.appointmentDate).getTime()
-      );
-    }
+    // Appointment date - latest first
+    return (
+      new Date(b.appointmentDate).getTime() -
+      new Date(a.appointmentDate).getTime()
+    );
   });
 
   // Group appointments by date for separators
@@ -476,11 +471,7 @@ function AppointmentsList() {
     const groups: { [key: string]: any[] } = {};
     appointments.forEach((appointment) => {
       const dateKey = format(
-        new Date(
-          sortBy === "booking"
-            ? appointment.createdAt
-            : appointment.appointmentDate
-        ),
+        new Date(appointment.appointmentDate),
         "yyyy-MM-dd"
       );
       if (!groups[dateKey]) {
@@ -1041,20 +1032,19 @@ function AppointmentsList() {
   // Render appointment action buttons
   const renderAppointmentActions = (appointment: any) => (
     <div className="flex gap-2 pt-2">
-      {/* Doctor/Admin can approve pending appointments */}
-      {appointment.status === "pending" &&
-        (user?.role === "doctor" || user?.role === "admin") && (
-          <Button
-            size="sm"
-            variant="default"
-            className="flex-1 bg-green-600 hover:bg-green-700"
-            onClick={() => openApproveDialog(appointment)}
-            data-testid={`button-approve-${appointment.id}`}
-          >
-            <Check className="w-4 h-4 mr-2" />
-            Approve
-          </Button>
-        )}
+      {/* Doctor can approve pending appointments */}
+      {appointment.status === "pending" && user?.role === "doctor" && (
+        <Button
+          size="sm"
+          variant="default"
+          className="flex-1 bg-green-600 hover:bg-green-700"
+          onClick={() => openApproveDialog(appointment)}
+          data-testid={`button-approve-${appointment.id}`}
+        >
+          <Check className="w-4 h-4 mr-2" />
+          Approve
+        </Button>
+      )}
       {/* Doctor/Admin can complete confirmed appointments */}
       {appointment.status === "confirmed" &&
         (user?.role === "doctor" || user?.role === "admin") && (
@@ -1278,25 +1268,6 @@ function AppointmentsList() {
                 />
               </div>
             </div>
-            <div>
-              <Label htmlFor="sort-by" className="mb-2 block">
-                Sort By
-              </Label>
-              <Select
-                value={sortBy}
-                onValueChange={(value: "booking" | "appointment") =>
-                  setSortBy(value)
-                }
-              >
-                <SelectTrigger id="sort-by">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="appointment">Appointment Date</SelectItem>
-                  <SelectItem value="booking">Booking Date</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
           </CardContent>
         </Card>
       )}
@@ -1304,9 +1275,7 @@ function AppointmentsList() {
       {/* Results Summary */}
       <div className="text-sm text-muted-foreground">
         Showing {sortedAppointments.length} of {appointments.length}{" "}
-        appointments
-        {sortBy === "booking" && " (sorted by booking date)"}
-        {sortBy === "appointment" && " (sorted by appointment date)"}
+        appointments (sorted by appointment date)
       </div>
     </div>
   );
@@ -1408,12 +1377,7 @@ function AppointmentsList() {
                           <div className="flex items-center gap-3">
                             <div className="h-px bg-border flex-1"></div>
                             <div className="text-xs font-medium text-muted-foreground px-2">
-                              {format(
-                                new Date(dateKey),
-                                sortBy === "booking"
-                                  ? "'Booked' MMM dd"
-                                  : "MMM dd"
-                              )}
+                              {format(new Date(dateKey), "MMM dd")}
                             </div>
                             <div className="h-px bg-border flex-1"></div>
                           </div>
@@ -1458,15 +1422,6 @@ function AppointmentsList() {
                                           )}
                                         </span>
                                       </div>
-                                      {appointment.createdAt && (
-                                        <div className="text-xs text-muted-foreground">
-                                          Booked on{" "}
-                                          {format(
-                                            new Date(appointment.createdAt),
-                                            "MMM dd, yyyy 'at' h:mm a"
-                                          )}
-                                        </div>
-                                      )}
                                     </div>
                                     <div className="flex items-center gap-2 text-sm text-foreground">
                                       <Clock className="w-4 h-4 text-muted-foreground" />
@@ -1519,12 +1474,7 @@ function AppointmentsList() {
               <div className="flex items-center gap-3">
                 <div className="h-px bg-border flex-1"></div>
                 <div className="text-sm font-semibold text-foreground px-3 py-1 bg-muted rounded-full">
-                  {format(
-                    new Date(dateKey),
-                    sortBy === "booking"
-                      ? "'Booked on' MMMM dd, yyyy"
-                      : "MMMM dd, yyyy"
-                  )}
+                  {format(new Date(dateKey), "MMMM dd, yyyy")}
                 </div>
                 <div className="h-px bg-border flex-1"></div>
               </div>
@@ -1562,15 +1512,6 @@ function AppointmentsList() {
                             )}
                           </span>
                         </div>
-                        {appointment.createdAt && (
-                          <div className="text-xs text-muted-foreground">
-                            Booked on{" "}
-                            {format(
-                              new Date(appointment.createdAt),
-                              "MMM dd, yyyy 'at' h:mm a"
-                            )}
-                          </div>
-                        )}
                       </div>
                       <div className="flex items-center gap-2 text-sm text-foreground">
                         <Clock className="w-4 h-4 text-muted-foreground" />
@@ -1674,10 +1615,9 @@ function AppointmentsList() {
                         )}
 
                       <div className="flex gap-2 pt-2">
-                        {/* Doctor/Admin can approve pending appointments */}
+                        {/* Doctor can approve pending appointments */}
                         {appointment.status === "pending" &&
-                          (user?.role === "doctor" ||
-                            user?.role === "admin") && (
+                          user?.role === "doctor" && (
                             <Button
                               size="sm"
                               variant="default"
@@ -2624,9 +2564,6 @@ function AppointmentsTable() {
     from: "",
     to: "",
   });
-  const [sortBy, setSortBy] = useState<"booking" | "appointment">(
-    "appointment"
-  );
 
   // Completion dialog states
   const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
@@ -2653,7 +2590,6 @@ function AppointmentsTable() {
     queryKey: ["/api/appointments"],
     retry: 1,
     staleTime: 0, // Force fresh data
-    cacheTime: 0, // Don't cache
   });
 
   // Debug: Log what we received
@@ -2926,14 +2862,10 @@ function AppointmentsTable() {
 
   // Sort appointments - latest dates first
   const sortedAppointments = [...filteredAppointments].sort((a, b) => {
-    if (sortBy === "booking") {
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    } else {
-      return (
-        new Date(b.appointmentDate).getTime() -
-        new Date(a.appointmentDate).getTime()
-      );
-    }
+    return (
+      new Date(b.appointmentDate).getTime() -
+      new Date(a.appointmentDate).getTime()
+    );
   });
 
   // Calculate category counts
@@ -3169,27 +3101,6 @@ function AppointmentsTable() {
                   />
                 </div>
               </div>
-              <div>
-                <Label htmlFor="sort-by-table" className="mb-2 block">
-                  Sort By
-                </Label>
-                <Select
-                  value={sortBy}
-                  onValueChange={(value: "booking" | "appointment") =>
-                    setSortBy(value)
-                  }
-                >
-                  <SelectTrigger id="sort-by-table">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="appointment">
-                      Appointment Date
-                    </SelectItem>
-                    <SelectItem value="booking">Booking Date</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
             </CardContent>
           </Card>
         )}
@@ -3197,9 +3108,7 @@ function AppointmentsTable() {
         {/* Results Summary */}
         <div className="text-sm text-muted-foreground">
           Showing {sortedAppointments.length} of {appointments.length}{" "}
-          appointments
-          {sortBy === "booking" && " (sorted by booking date)"}
-          {sortBy === "appointment" && " (sorted by appointment date)"}
+          appointments (sorted by appointment date)
         </div>
       </div>
 
@@ -3221,7 +3130,6 @@ function AppointmentsTable() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-[140px]">Appointment Date</TableHead>
-                  <TableHead className="w-[140px]">Booked Date</TableHead>
                   <TableHead className="w-[180px]">Patient</TableHead>
                   <TableHead className="w-[180px]">Doctor</TableHead>
                   <TableHead className="w-[150px]">Specialization</TableHead>
@@ -3233,7 +3141,7 @@ function AppointmentsTable() {
               <TableBody>
                 {sortedAppointments.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8">
+                    <TableCell colSpan={7} className="text-center py-8">
                       <div className="text-muted-foreground">
                         No appointments found
                       </div>
@@ -3265,14 +3173,6 @@ function AppointmentsTable() {
                                   )
                                 : "Not set")}
                         </div>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
-                        {appointment.createdAt
-                          ? format(
-                              new Date(appointment.createdAt),
-                              "MM/dd/yyyy h:mm a"
-                            )
-                          : "N/A"}
                       </TableCell>
                       <TableCell
                         className="font-medium"

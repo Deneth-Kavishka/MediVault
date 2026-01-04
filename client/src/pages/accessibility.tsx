@@ -277,7 +277,7 @@ export default function Accessibility() {
                   <strong>Email:</strong> accessibility@medivault.com
                 </p>
                 <p>
-                  <strong>Phone:</strong> +1-234-567-8900
+                  <strong>Phone:</strong> +94 76 914 6080
                 </p>
                 <p>
                   <strong>Address:</strong> 123 Healthcare Ave, Medical City

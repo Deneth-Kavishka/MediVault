@@ -3,6 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
+import { format } from "date-fns";
 import {
   Card,
   CardContent,
@@ -24,12 +27,11 @@ import {
   Activity,
   Pill,
   FlaskConical,
+  TrendingUp,
   Receipt,
   Bell,
-  TrendingUp,
   Database,
   Server,
-  AlertTriangle,
   UserPlus,
   Clock,
   Download,
@@ -37,12 +39,21 @@ import {
   Smartphone,
   CheckCircle,
   XCircle,
+  RefreshCw,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   LineChart,
   Line,
@@ -62,24 +73,48 @@ import {
 } from "@/components/dashboard-customization";
 import PrescriptionDetailsDialog from "@/components/prescription-details-dialog";
 import LabAvailabilitySection from "@/components/lab-availability-section";
+import { AdminAddUserDialog } from "@/components/admin/add-user-dialog";
+
+const formatSriLankaDateTime = (
+  value: any,
+  options?: { withSeconds?: boolean }
+) => {
+  if (!value) return "N/A";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "N/A";
+
+  const withSeconds = options?.withSeconds ?? true;
+
+  return new Intl.DateTimeFormat("en-LK", {
+    timeZone: "Asia/Colombo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    ...(withSeconds ? { second: "2-digit" } : {}),
+    hour12: false,
+  }).format(date);
+};
 
 export default function Dashboard() {
-  const { user, isLoading, isAuthenticated } = useAuth();
+  const { user, isLoading, isAuthenticated, authMessage } = useAuth();
   const { toast } = useToast();
 
   // Redirect if not authenticated
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
       toast({
-        title: "Unauthorized",
-        description: "You are logged out. Logging in again...",
+        title: "Account Access",
+        description:
+          authMessage?.trim() || "You are logged out. Logging in again...",
         variant: "destructive",
       });
       setTimeout(() => {
         window.location.href = "/login";
       }, 500);
     }
-  }, [isAuthenticated, isLoading, toast]);
+  }, [authMessage, isAuthenticated, isLoading, toast]);
 
   if (isLoading) {
     return <DashboardSkeleton />;
@@ -548,63 +583,425 @@ function PatientDashboard() {
 }
 
 function DoctorDashboard() {
-  const statsCards = [
+  const { user } = useAuth();
+  const [, navigate] = useLocation();
+
+  const { data: appointments = [], isLoading: appointmentsLoading } = useQuery<
+    any[]
+  >({
+    queryKey: ["/api/appointments"],
+    refetchInterval: 15000,
+  });
+
+  // Fetch doctor id (needed for availability)
+  const { data: doctors = [] } = useQuery<any[]>({
+    queryKey: ["/api/doctors"],
+    enabled: !!user,
+  });
+
+  const currentDoctor = useMemo(() => {
+    if (!user?.id) return null;
+    return doctors.find((d: any) => d.userId === user.id) || null;
+  }, [doctors, user?.id]);
+
+  const { data: availability = [], isLoading: availabilityLoading } = useQuery<
+    any[]
+  >({
+    queryKey: ["/api/doctor-availability/doctor", currentDoctor?.id],
+    queryFn: async () => {
+      const response = await fetch(
+        `/api/doctor-availability/doctor/${currentDoctor?.id}`,
+        {
+          credentials: "include",
+        }
+      );
+      if (!response.ok) throw new Error("Failed to fetch availability");
+      return response.json();
+    },
+    enabled: !!currentDoctor?.id,
+    staleTime: 60000,
+    refetchOnWindowFocus: false,
+  });
+
+  const todayKey = useMemo(() => format(new Date(), "yyyy-MM-dd"), []);
+
+  const derived = useMemo(() => {
+    const safeAppointments = Array.isArray(appointments) ? appointments : [];
+    const safeAvailability = Array.isArray(availability) ? availability : [];
+
+    const getAptDayKey = (apt: any) => {
+      try {
+        const d = apt?.appointmentDate ? new Date(apt.appointmentDate) : null;
+        if (!d || Number.isNaN(d.getTime())) return null;
+        return format(d, "yyyy-MM-dd");
+      } catch {
+        return null;
+      }
+    };
+
+    const todaysAppointments = safeAppointments
+      .filter((apt: any) => {
+        const dayKey = getAptDayKey(apt);
+        return dayKey === todayKey;
+      })
+      .filter(
+        (apt: any) => apt?.status !== "cancelled" && apt?.status !== "completed"
+      )
+      .sort((a: any, b: any) => {
+        const aTime = (a?.appointmentTime || "").toString();
+        const bTime = (b?.appointmentTime || "").toString();
+        return aTime.localeCompare(bTime);
+      });
+
+    const pending = safeAppointments.filter(
+      (a: any) => a?.status === "pending"
+    ).length;
+    const confirmed = safeAppointments.filter(
+      (a: any) => a?.status === "confirmed"
+    ).length;
+    const completed = safeAppointments.filter(
+      (a: any) => a?.status === "completed"
+    ).length;
+    const cancelled = safeAppointments.filter(
+      (a: any) => a?.status === "cancelled"
+    ).length;
+    const cancellationRequested = safeAppointments.filter(
+      (a: any) => a?.status === "cancellation_requested"
+    ).length;
+
+    const upcomingAppointments = safeAppointments
+      .filter((apt: any) => {
+        const d = apt?.appointmentDate ? new Date(apt.appointmentDate) : null;
+        if (!d || Number.isNaN(d.getTime())) return false;
+        return d.getTime() >= new Date().setHours(0, 0, 0, 0);
+      })
+      .filter(
+        (apt: any) => apt?.status !== "cancelled" && apt?.status !== "completed"
+      );
+
+    // Last 14 days chart by scheduled appointment date
+    const days: { key: string; label: string }[] = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      days.push({
+        key: format(d, "yyyy-MM-dd"),
+        label: format(d, "MM/dd"),
+      });
+    }
+    const countsByDay = new Map<string, number>();
+    for (const apt of safeAppointments) {
+      const key = getAptDayKey(apt);
+      if (!key) continue;
+      countsByDay.set(key, (countsByDay.get(key) || 0) + 1);
+    }
+    const appointmentsTrend = days.map((d) => ({
+      day: d.label,
+      appointments: countsByDay.get(d.key) || 0,
+    }));
+
+    const statusBreakdown = [
+      { status: "Pending", value: pending },
+      { status: "Confirmed", value: confirmed },
+      { status: "Cancellation Req.", value: cancellationRequested },
+      { status: "Cancelled", value: cancelled },
+      { status: "Completed", value: completed },
+    ];
+
+    const upcomingAvailability = safeAvailability.filter((a: any) => {
+      const status = a?.status || (a?.isActive ? "active" : "inactive");
+      if (status === "deleted") return false;
+      if (!a?.availableDate) return false;
+      const d = new Date(a.availableDate);
+      if (Number.isNaN(d.getTime())) return false;
+      return d.getTime() >= new Date().setHours(0, 0, 0, 0);
+    });
+
+    const totalSlots = upcomingAvailability.reduce(
+      (sum: number, a: any) => sum + (Number(a?.maxPatients) || 0),
+      0
+    );
+    const bookedSlots = upcomingAvailability.reduce(
+      (sum: number, a: any) => sum + (Number(a?.bookedCount) || 0),
+      0
+    );
+    const utilizationPct =
+      totalSlots > 0 ? Math.round((bookedSlots / totalSlots) * 100) : 0;
+
+    return {
+      todaysAppointments,
+      pending,
+      confirmed,
+      completed,
+      cancelled,
+      cancellationRequested,
+      upcomingAppointmentsCount: upcomingAppointments.length,
+      appointmentsTrend,
+      statusBreakdown,
+      upcomingAvailabilityCount: upcomingAvailability.length,
+      utilizationPct,
+    };
+  }, [appointments, availability, todayKey]);
+
+  const overviewCards = [
     {
       title: "Today's Appointments",
-      value: "12",
+      value: derived.todaysAppointments.length,
       icon: Calendar,
-      color: "text-chart-1",
+      color: "text-blue-600",
+      onClick: () => navigate("/appointments"),
     },
     {
-      title: "Pending Consultations",
-      value: "5",
+      title: "Pending Approvals",
+      value: derived.pending,
+      icon: Clock,
+      color: "text-amber-600",
+      onClick: () => navigate("/appointments"),
+    },
+    {
+      title: "Cancellation Requests",
+      value: derived.cancellationRequested,
+      icon: XCircle,
+      color: "text-orange-600",
+      onClick: () => navigate("/appointments"),
+    },
+    {
+      title: "Upcoming Schedules",
+      value: derived.upcomingAvailabilityCount,
       icon: Users,
-      color: "text-chart-2",
-    },
-    {
-      title: "Prescriptions Issued",
-      value: "8",
-      icon: Pill,
-      color: "text-chart-3",
-    },
-    {
-      title: "Lab Tests Ordered",
-      value: "6",
-      icon: FlaskConical,
-      color: "text-chart-4",
+      color: "text-green-600",
+      onClick: () => navigate("/doctor/availability"),
     },
   ];
 
+  const isLoading = appointmentsLoading || availabilityLoading;
+
+  if (isLoading) {
+    return <DashboardSkeleton />;
+  }
+
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-        {statsCards.map((stat) => (
-          <Card key={stat.title}>
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                {stat.title}
-              </CardTitle>
-              <stat.icon className={`h-5 w-5 ${stat.color}`} />
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold text-foreground">
-                {stat.value}
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">
+            Doctor Dashboard
+          </h2>
+          <p className="text-muted-foreground">
+            Overview and analytics of your appointments and schedules
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => navigate("/appointments")}>
+            View Appointments
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => navigate("/doctor/availability")}
+          >
+            Manage Availability
+          </Button>
+        </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Today's Schedule</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="text-center py-8 text-muted-foreground">
-            No appointments scheduled for today
+      <Tabs defaultValue="overview" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="analytics">Analytics</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" className="space-y-6">
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+            {overviewCards.map((stat) => (
+              <Card
+                key={stat.title}
+                className="cursor-pointer hover:shadow-lg transition-shadow"
+                onClick={stat.onClick}
+              >
+                <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">
+                    {stat.title}
+                  </CardTitle>
+                  <stat.icon className={`h-5 w-5 ${stat.color}`} />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-3xl font-bold text-foreground">
+                    {stat.value}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Click to view details
+                  </p>
+                </CardContent>
+              </Card>
+            ))}
           </div>
-        </CardContent>
-      </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Today's Schedule</CardTitle>
+              <CardDescription>
+                {derived.todaysAppointments.length} appointment(s) today
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {derived.todaysAppointments.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  No appointments scheduled for today
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {derived.todaysAppointments.slice(0, 8).map((apt: any) => (
+                    <div
+                      key={apt.id}
+                      className="flex items-center justify-between rounded-lg border p-3"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">
+                            {apt.patientName || "Patient"}
+                          </span>
+                          <Badge variant="outline">{apt.status}</Badge>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {apt.appointmentTime
+                            ? `Time: ${apt.appointmentTime}`
+                            : ""}
+                          {apt.reason ? ` • ${apt.reason}` : ""}
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => navigate("/appointments")}
+                      >
+                        Open
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="analytics" className="space-y-6">
+          <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  Total Appointments
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {Array.isArray(appointments) ? appointments.length : 0}
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  Upcoming Appointments
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {derived.upcomingAppointmentsCount}
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  Completed
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{derived.completed}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  Utilization (Upcoming)
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {derived.utilizationPct}%
+                </div>
+                <div className="mt-2 w-full bg-muted rounded-full h-2">
+                  <div
+                    className="bg-primary h-2 rounded-full transition-all duration-300"
+                    style={{
+                      width: `${Math.min(derived.utilizationPct, 100)}%`,
+                    }}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid gap-6 md:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Activity className="h-5 w-5" />
+                  Appointments Trend (14 days)
+                </CardTitle>
+                <CardDescription>
+                  Count of scheduled appointments by day
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="h-[280px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={derived.appointmentsTrend}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="day" />
+                    <YAxis allowDecimals={false} />
+                    <Tooltip />
+                    <Line
+                      type="monotone"
+                      dataKey="appointments"
+                      stroke="hsl(var(--primary))"
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Users className="h-5 w-5" />
+                  Status Breakdown
+                </CardTitle>
+                <CardDescription>
+                  Current appointment status counts
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="h-[280px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={derived.statusBreakdown}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="status" />
+                    <YAxis allowDecimals={false} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar
+                      dataKey="value"
+                      fill="hsl(var(--primary))"
+                      radius={[4, 4, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
@@ -1437,12 +1834,32 @@ function LabTechnicianDashboard() {
 }
 
 function AdminDashboard() {
+  const [usagePeriod, setUsagePeriod] = useState<
+    "daily" | "weekly" | "monthly" | "yearly"
+  >("daily");
+
+  const [activityDate, setActivityDate] = useState("");
+  const [activityAction, setActivityAction] = useState("all");
+
   const { data: stats, isLoading } = useQuery({
     queryKey: ["/api/admin/stats"],
   });
 
-  const { data: activityTimeline } = useQuery({
-    queryKey: ["/api/admin/activity-timeline"],
+  const {
+    data: activityTimeline,
+    isLoading: activityLoading,
+    error: activityError,
+  } = useQuery({
+    queryKey: [
+      `/api/admin/activity-timeline?${new URLSearchParams({
+        limit: "500",
+        ...(activityAction && activityAction !== "all"
+          ? { action: activityAction }
+          : {}),
+        ...(activityDate ? { from: `${activityDate}T00:00:00.000Z` } : {}),
+        ...(activityDate ? { to: `${activityDate}T23:59:59.999Z` } : {}),
+      }).toString()}`,
+    ],
   });
 
   const { data: systemHealth } = useQuery({
@@ -1454,18 +1871,74 @@ function AdminDashboard() {
     queryKey: ["/api/admin/pending-appointments"],
   });
 
-  const { data: revenueChart } = useQuery({
-    queryKey: ["/api/admin/revenue-chart"],
+  const {
+    data: recentVisits,
+    refetch: refetchRecentVisits,
+    isFetching: isFetchingRecentVisits,
+  } = useQuery({
+    queryKey: ["/api/admin/recent-visits"],
   });
+
+  const [recentVisitsRole, setRecentVisitsRole] = useState<string>("all");
+  const [recentVisitsSearch, setRecentVisitsSearch] = useState<string>("");
+
+  const availableRecentVisitRoles = useMemo(() => {
+    if (!Array.isArray(recentVisits)) return ["unregistered"]; // fallback
+
+    const roles = new Set<string>();
+    for (const visit of recentVisits) {
+      const role = visit?.user?.role ? String(visit.user.role) : "unregistered";
+      roles.add(role);
+    }
+
+    return Array.from(roles).sort((a, b) => a.localeCompare(b));
+  }, [recentVisits]);
+
+  const filteredRecentVisits = useMemo(() => {
+    if (!Array.isArray(recentVisits)) return [];
+
+    const q = recentVisitsSearch.trim().toLowerCase();
+
+    return recentVisits.filter((visit: any) => {
+      const role = visit?.user?.role ? String(visit.user.role) : "unregistered";
+      if (recentVisitsRole !== "all" && role !== recentVisitsRole) return false;
+
+      if (!q) return true;
+
+      const u = visit?.user;
+      const name = u
+        ? [u.firstName, u.lastName].filter(Boolean).join(" ") ||
+          u.username ||
+          u.email ||
+          ""
+        : "unregistered";
+      const email = u?.email ? String(u.email) : "";
+      const pathname = visit?.pathname ? String(visit.pathname) : "";
+
+      return (
+        name.toLowerCase().includes(q) ||
+        email.toLowerCase().includes(q) ||
+        pathname.toLowerCase().includes(q) ||
+        role.toLowerCase().includes(q)
+      );
+    });
+  }, [recentVisits, recentVisitsRole, recentVisitsSearch]);
 
   const { data: userGrowthChart } = useQuery({
     queryKey: ["/api/admin/user-growth-chart"],
   });
 
+  const {
+    data: systemUsageChart,
+    isLoading: systemUsageLoading,
+    error: systemUsageError,
+  } = useQuery({
+    queryKey: [`/api/admin/system-usage-chart?period=${usagePeriod}`],
+  });
+
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [showAddUserDialog, setShowAddUserDialog] = useState(false);
-  const [showAlertsDialog, setShowAlertsDialog] = useState(false);
   const { isWidgetVisible } = useDashboardPreferences();
 
   console.log("🔧 AdminDashboard Debug:", {
@@ -1474,8 +1947,8 @@ function AdminDashboard() {
     activityTimeline: activityTimeline?.length,
     systemHealth,
     pendingAppointments: pendingAppointments?.length,
-    revenueChart: revenueChart?.length,
     userGrowthChart: userGrowthChart?.length,
+    systemUsageChart: systemUsageChart?.length,
   });
 
   if (isLoading) {
@@ -1521,17 +1994,356 @@ function AdminDashboard() {
   ];
 
   const handleBackup = () => {
-    toast({
-      title: "Backup Started",
-      description: "System backup has been initiated.",
-    });
+    setLocation("/settings?tab=backup");
   };
 
   const handleMonthlyReport = () => {
-    toast({
-      title: "Generating Report",
-      description: "Monthly report is being generated...",
-    });
+    try {
+      const reportMonthLabel = format(new Date(), "MMMM yyyy");
+      const filename = `MediVault-Monthly-Report-${format(
+        new Date(),
+        "yyyy-MM"
+      )}.pdf`;
+
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      let yPosition = 15;
+
+      // Header
+      doc.setFontSize(18);
+      doc.setTextColor(59, 130, 246);
+      doc.text("MediVault", pageWidth / 2, yPosition, { align: "center" });
+
+      yPosition += 8;
+      doc.setFontSize(16);
+      doc.setTextColor(0, 0, 0);
+      doc.text(
+        `Monthly Full Report - ${reportMonthLabel}`,
+        pageWidth / 2,
+        yPosition,
+        {
+          align: "center",
+        }
+      );
+
+      yPosition += 6;
+      doc.setFontSize(10);
+      doc.setTextColor(100, 100, 100);
+      doc.text(
+        `Generated on ${format(new Date(), "MMMM dd, yyyy 'at' HH:mm")}`,
+        pageWidth / 2,
+        yPosition,
+        { align: "center" }
+      );
+
+      yPosition += 10;
+      doc.setDrawColor(200, 200, 200);
+      doc.line(15, yPosition, pageWidth - 15, yPosition);
+      yPosition += 10;
+
+      // Overview
+      doc.setFontSize(14);
+      doc.setTextColor(0, 0, 0);
+      doc.text("System Overview", 15, yPosition);
+      yPosition += 8;
+
+      const overviewRows = [
+        ["Total Users", String(stats?.totalUsers ?? 0)],
+        ["Active Patients", String(stats?.activePatients ?? 0)],
+        ["Total Appointments", String(stats?.totalAppointments ?? 0)],
+        ["Pending Appointments", String(stats?.pendingAppointments ?? 0)],
+        ["Completed Appointments", String(stats?.completedAppointments ?? 0)],
+        ["Confirmed Appointments", String(stats?.confirmedAppointments ?? 0)],
+      ];
+
+      autoTable(doc, {
+        startY: yPosition,
+        head: [["Metric", "Value"]],
+        body: overviewRows,
+        theme: "grid",
+        headStyles: { fillColor: [59, 130, 246] },
+        margin: { left: 15, right: 15 },
+        styles: { fontSize: 10 },
+      });
+
+      yPosition = (doc as any).lastAutoTable.finalY + 12;
+
+      // System Health
+      if (yPosition > pageHeight - 70) {
+        doc.addPage();
+        yPosition = 20;
+      }
+      doc.setFontSize(14);
+      doc.text("System Health", 15, yPosition);
+      yPosition += 8;
+
+      const healthRows = [
+        [
+          "Database",
+          systemHealth?.database ? String(systemHealth.database) : "N/A",
+        ],
+        ["Uptime", systemHealth?.uptime ? String(systemHealth.uptime) : "N/A"],
+        [
+          "Memory",
+          systemHealth?.memory?.used != null &&
+          systemHealth?.memory?.total != null
+            ? `${systemHealth.memory.used} / ${systemHealth.memory.total} MB`
+            : "N/A",
+        ],
+      ];
+
+      autoTable(doc, {
+        startY: yPosition,
+        head: [["Check", "Status"]],
+        body: healthRows,
+        theme: "striped",
+        headStyles: { fillColor: [59, 130, 246] },
+        margin: { left: 15, right: 15 },
+        styles: { fontSize: 10 },
+      });
+
+      yPosition = (doc as any).lastAutoTable.finalY + 12;
+
+      // Pending Appointments
+      const pendingList = Array.isArray(pendingAppointments)
+        ? pendingAppointments.slice(0, 15)
+        : [];
+
+      if (pendingList.length > 0) {
+        if (yPosition > pageHeight - 70) {
+          doc.addPage();
+          yPosition = 20;
+        }
+        doc.setFontSize(14);
+        doc.text("Pending Appointments (Top 15)", 15, yPosition);
+        yPosition += 8;
+
+        const pendingRows = pendingList.map((apt: any) => [
+          String(apt?.id || ""),
+          apt?.appointmentDate
+            ? format(new Date(apt.appointmentDate), "MM/dd/yyyy HH:mm")
+            : "N/A",
+          String(apt?.status || "pending"),
+        ]);
+
+        autoTable(doc, {
+          startY: yPosition,
+          head: [["Appointment ID", "Appointment Date", "Status"]],
+          body: pendingRows,
+          theme: "grid",
+          headStyles: { fillColor: [59, 130, 246] },
+          margin: { left: 15, right: 15 },
+          styles: { fontSize: 8 },
+        });
+
+        yPosition = (doc as any).lastAutoTable.finalY + 12;
+      }
+
+      // Activity Timeline
+      const activityList = Array.isArray(activityTimeline)
+        ? activityTimeline.slice(0, 25)
+        : [];
+      if (activityList.length > 0) {
+        if (yPosition > pageHeight - 70) {
+          doc.addPage();
+          yPosition = 20;
+        }
+        doc.setFontSize(14);
+        doc.text("Activity Timeline (Top 25)", 15, yPosition);
+        yPosition += 8;
+
+        const activityRows = activityList.map((log: any) => {
+          const ts = log?.timestamp ?? log?.createdAt ?? null;
+          return [
+            ts ? formatSriLankaDateTime(ts, { withSeconds: false }) : "N/A",
+            String(log?.action || ""),
+          ];
+        });
+
+        autoTable(doc, {
+          startY: yPosition,
+          head: [["Timestamp", "Action"]],
+          body: activityRows,
+          theme: "grid",
+          headStyles: { fillColor: [59, 130, 246] },
+          margin: { left: 15, right: 15 },
+          styles: { fontSize: 8 },
+        });
+
+        yPosition = (doc as any).lastAutoTable.finalY + 12;
+      }
+
+      // Recent Users
+      const recentUsers = Array.isArray(stats?.recentUsers)
+        ? stats.recentUsers.slice(0, 15)
+        : [];
+      if (recentUsers.length > 0) {
+        if (yPosition > pageHeight - 70) {
+          doc.addPage();
+          yPosition = 20;
+        }
+        doc.setFontSize(14);
+        doc.text("Recent Users (Last 24h)", 15, yPosition);
+        yPosition += 8;
+
+        const recentRows = recentUsers.map((u: any) => [
+          String(u?.firstName || ""),
+          String(u?.lastName || ""),
+          String(u?.email || ""),
+          String(u?.role || ""),
+        ]);
+
+        autoTable(doc, {
+          startY: yPosition,
+          head: [["First Name", "Last Name", "Email", "Role"]],
+          body: recentRows,
+          theme: "grid",
+          headStyles: { fillColor: [59, 130, 246] },
+          margin: { left: 15, right: 15 },
+          styles: { fontSize: 8 },
+        });
+      }
+
+      // Footer
+      const totalPages = (doc as any).internal.pages.length - 1;
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setTextColor(150, 150, 150);
+        doc.text(
+          `Page ${i} of ${totalPages} | MediVault Monthly Report (${reportMonthLabel})`,
+          pageWidth / 2,
+          pageHeight - 10,
+          { align: "center" }
+        );
+      }
+
+      doc.save(filename);
+
+      toast({
+        title: "Report Downloaded",
+        description: `Monthly report saved as ${filename}`,
+      });
+    } catch (error) {
+      console.error("Monthly report PDF error:", error);
+      toast({
+        title: "Report Failed",
+        description: "Failed to generate monthly PDF report",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const downloadActivityTimelinePdf = async (mode: "all" | "filtered") => {
+    try {
+      const params: Record<string, string> = { limit: "500" };
+      if (mode === "filtered") {
+        if (activityAction && activityAction !== "all") {
+          params.action = activityAction;
+        }
+        if (activityDate) {
+          params.from = `${activityDate}T00:00:00.000Z`;
+          params.to = `${activityDate}T23:59:59.999Z`;
+        }
+      }
+
+      const qs = new URLSearchParams(params).toString();
+      const resp = await fetch(`/api/admin/activity-timeline?${qs}`, {
+        credentials: "include",
+      });
+      if (!resp.ok) {
+        throw new Error(`Failed (${resp.status})`);
+      }
+      const logs = await resp.json();
+
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      let y = 15;
+
+      doc.setFontSize(16);
+      doc.text("Activity Timeline Report", pageWidth / 2, y, {
+        align: "center",
+      });
+      y += 8;
+
+      doc.setFontSize(10);
+      const subtitleParts: string[] = [];
+      subtitleParts.push(
+        mode === "all" ? "All (latest 500)" : "Filtered (latest 500)"
+      );
+      if (mode === "filtered") {
+        if (activityDate) subtitleParts.push(`Date: ${activityDate}`);
+        if (activityAction && activityAction !== "all") {
+          subtitleParts.push(`Action: ${activityAction}`);
+        }
+      }
+      doc.text(subtitleParts.join(" | "), pageWidth / 2, y, {
+        align: "center",
+      });
+      y += 10;
+
+      const rows = Array.isArray(logs)
+        ? logs.map((log: any) => {
+            const ts = log?.timestamp ?? log?.createdAt ?? null;
+            const action = String(log?.action || "");
+            const entityType = log?.entityType ? String(log.entityType) : "";
+            const userId = log?.userId ? String(log.userId) : "";
+            const details = log?.details ? String(log.details) : "";
+            const ip = log?.ipAddress ? String(log.ipAddress) : "";
+            return [
+              ts ? format(new Date(ts), "yyyy-MM-dd HH:mm") : "N/A",
+              action,
+              entityType,
+              userId,
+              details,
+              ip,
+            ];
+          })
+        : [];
+
+      autoTable(doc, {
+        startY: y,
+        head: [["Timestamp", "Action", "Entity", "User", "Details", "IP"]],
+        body: rows,
+        theme: "grid",
+        headStyles: { fillColor: [59, 130, 246] },
+        styles: { fontSize: 8 },
+        margin: { left: 10, right: 10 },
+        columnStyles: {
+          0: { cellWidth: 28 },
+          1: { cellWidth: 22 },
+          2: { cellWidth: 18 },
+          3: { cellWidth: 24 },
+          4: { cellWidth: 70 },
+          5: { cellWidth: 22 },
+        },
+      });
+
+      const filename =
+        mode === "all"
+          ? `MediVault-Activity-Timeline-All-${format(
+              new Date(),
+              "yyyy-MM-dd"
+            )}.pdf`
+          : `MediVault-Activity-Timeline-Filtered-${format(
+              new Date(),
+              "yyyy-MM-dd"
+            )}.pdf`;
+
+      doc.save(filename);
+      toast({
+        title: "Downloaded",
+        description: `Saved as ${filename}`,
+      });
+    } catch (e) {
+      console.error("Activity timeline PDF error:", e);
+      toast({
+        title: "Download Failed",
+        description: "Failed to generate activity timeline PDF",
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -1574,13 +2386,16 @@ function AdminDashboard() {
             <CardTitle className="text-lg">Quick Actions</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-3">
-            <Button onClick={() => setShowAddUserDialog(true)}>
+            <Button
+              variant="outline"
+              onClick={() => setShowAddUserDialog(true)}
+            >
               <UserPlus className="w-4 h-4 mr-2" />
               Add User
             </Button>
             <Button
               variant="outline"
-              onClick={() => setLocation("/appointments")}
+              onClick={() => setLocation("/appointments-admin")}
             >
               <Clock className="w-4 h-4 mr-2" />
               View Today's Appointments
@@ -1592,10 +2407,6 @@ function AdminDashboard() {
             <Button variant="outline" onClick={handleBackup}>
               <HardDrive className="w-4 h-4 mr-2" />
               System Backup
-            </Button>
-            <Button variant="outline" onClick={() => setShowAlertsDialog(true)}>
-              <AlertTriangle className="w-4 h-4 mr-2" />
-              View Critical Alerts
             </Button>
           </CardContent>
         </Card>
@@ -1650,50 +2461,6 @@ function AdminDashboard() {
 
       {/* Charts Row */}
       <div className="grid gap-6 md:grid-cols-2">
-        {/* Revenue Chart */}
-        {isWidgetVisible("revenueChart") && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg flex items-center gap-2">
-                <TrendingUp className="w-5 h-5" />
-                Revenue (Last 30 Days)
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {revenueChart && revenueChart.length > 0 ? (
-                <ResponsiveContainer width="100%" height={250}>
-                  <LineChart data={revenueChart}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                      dataKey="date"
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(value) => {
-                        const date = new Date(value);
-                        return `${date.getMonth() + 1}/${date.getDate()}`;
-                      }}
-                    />
-                    <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip
-                      formatter={(value: any) => [`$${value}`, "Revenue"]}
-                      labelFormatter={(label) => `Date: ${label}`}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="revenue"
-                      stroke="hsl(var(--chart-1))"
-                      strokeWidth={2}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="text-center py-12 text-muted-foreground">
-                  No revenue data available
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
         {/* User Growth Chart */}
         {isWidgetVisible("userGrowthChart") && (
           <Card>
@@ -1732,6 +2499,112 @@ function AdminDashboard() {
             </CardContent>
           </Card>
         )}
+
+        {/* System Traffic Chart */}
+        {isWidgetVisible("systemUsageChart") && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Activity className="w-5 h-5" />
+                System Traffic
+              </CardTitle>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant={usagePeriod === "daily" ? "default" : "outline"}
+                  onClick={() => setUsagePeriod("daily")}
+                >
+                  Daily
+                </Button>
+                <Button
+                  size="sm"
+                  variant={usagePeriod === "weekly" ? "default" : "outline"}
+                  onClick={() => setUsagePeriod("weekly")}
+                >
+                  Weekly
+                </Button>
+                <Button
+                  size="sm"
+                  variant={usagePeriod === "monthly" ? "default" : "outline"}
+                  onClick={() => setUsagePeriod("monthly")}
+                >
+                  Monthly
+                </Button>
+                <Button
+                  size="sm"
+                  variant={usagePeriod === "yearly" ? "default" : "outline"}
+                  onClick={() => setUsagePeriod("yearly")}
+                >
+                  Yearly
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {systemUsageLoading ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  Loading usage data…
+                </div>
+              ) : systemUsageError ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  Failed to load usage data
+                </div>
+              ) : systemUsageChart && systemUsageChart.length > 0 ? (
+                <ResponsiveContainer width="100%" height={250}>
+                  <LineChart data={systemUsageChart}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="bucket"
+                      tick={{ fontSize: 12 }}
+                      tickFormatter={(value) => {
+                        if (
+                          usagePeriod === "daily" ||
+                          usagePeriod === "weekly"
+                        ) {
+                          const dt = new Date(`${value}T00:00:00Z`);
+                          return dt.toLocaleDateString(undefined, {
+                            month: "short",
+                            day: "2-digit",
+                          });
+                        }
+                        if (usagePeriod === "monthly") {
+                          const [y, m] = String(value).split("-");
+                          const dt = new Date(Number(y), Number(m) - 1, 1);
+                          return dt.toLocaleDateString(undefined, {
+                            month: "short",
+                            year: "2-digit",
+                          });
+                        }
+                        return String(value);
+                      }}
+                    />
+                    <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
+                    <Tooltip
+                      formatter={(value: any) => [value, "Traffic"]}
+                      labelFormatter={(label) => {
+                        if (usagePeriod === "weekly")
+                          return `Week of: ${label}`;
+                        if (usagePeriod === "daily") return `Date: ${label}`;
+                        if (usagePeriod === "monthly") return `Month: ${label}`;
+                        return `Year: ${label}`;
+                      }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="traffic"
+                      stroke="hsl(var(--chart-1))"
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="text-center py-12 text-muted-foreground">
+                  No usage data available
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* Bottom Row: Activity Timeline, Pending Appointments */}
@@ -1739,29 +2612,128 @@ function AdminDashboard() {
         {/* Activity Timeline */}
         {isWidgetVisible("activityTimeline") && (
           <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Activity Timeline</CardTitle>
+            <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
+              <div>
+                <CardTitle className="text-lg">Activity Timeline</CardTitle>
+                <CardDescription>Filter by date and action</CardDescription>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <Input
+                  type="date"
+                  value={activityDate}
+                  onChange={(e) => setActivityDate(e.target.value)}
+                  className="h-8 w-[140px]"
+                />
+
+                <Select
+                  value={activityAction}
+                  onValueChange={setActivityAction}
+                >
+                  <SelectTrigger className="h-8 w-[160px]">
+                    <SelectValue placeholder="Action" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All actions</SelectItem>
+                    <SelectItem value="page_view">Page views</SelectItem>
+                    <SelectItem value="login">Logins</SelectItem>
+                    <SelectItem value="logout">Logouts</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => downloadActivityTimelinePdf("filtered")}
+                >
+                  Download Filtered PDF
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => downloadActivityTimelinePdf("all")}
+                >
+                  Download Full PDF
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setActivityDate("");
+                    setActivityAction("all");
+                  }}
+                >
+                  Reset
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
               <ScrollArea className="h-[300px]">
-                {activityTimeline && activityTimeline.length > 0 ? (
+                {activityLoading ? (
                   <div className="space-y-3">
-                    {activityTimeline.map((log: any, index: number) => (
+                    {Array.from({ length: 6 }).map((_, idx) => (
                       <div
-                        key={index}
+                        key={idx}
                         className="flex items-start gap-3 pb-3 border-b last:border-0"
                       >
-                        <Activity className="w-4 h-4 mt-1 text-muted-foreground" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">
-                            {log.action}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {new Date(log.timestamp).toLocaleString()}
-                          </p>
+                        <Skeleton className="h-4 w-4 rounded" />
+                        <div className="flex-1 space-y-2">
+                          <Skeleton className="h-4 w-2/3" />
+                          <Skeleton className="h-3 w-1/3" />
                         </div>
                       </div>
                     ))}
+                  </div>
+                ) : activityError ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    Failed to load activity
+                  </div>
+                ) : activityTimeline && activityTimeline.length > 0 ? (
+                  <div className="space-y-3">
+                    {activityTimeline.map((log: any, index: number) =>
+                      (() => {
+                        const ts = log?.timestamp ?? log?.createdAt ?? null;
+                        const actionRaw = String(log?.action || "");
+                        const entityType = log?.entityType
+                          ? String(log.entityType)
+                          : "";
+                        const details = log?.details ? String(log.details) : "";
+
+                        let title = actionRaw
+                          .replace(/_/g, " ")
+                          .trim()
+                          .replace(/\b\w/g, (c) => c.toUpperCase());
+
+                        if (actionRaw === "page_view") {
+                          const m = details.match(/pathname=([^\s]+)/);
+                          if (m?.[1]) title = `Page View: ${m[1]}`;
+                          else title = "Page View";
+                        }
+
+                        const subtitleParts = [
+                          entityType ? entityType : null,
+                          ts ? formatSriLankaDateTime(ts) : null,
+                        ].filter(Boolean);
+
+                        return (
+                          <div
+                            key={index}
+                            className="flex items-start gap-3 pb-3 border-b last:border-0"
+                          >
+                            <Activity className="w-4 h-4 mt-1 text-muted-foreground" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium truncate">
+                                {title}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {subtitleParts.join(" • ")}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })()
+                    )}
                   </div>
                 ) : (
                   <div className="text-center py-12 text-muted-foreground">
@@ -1784,7 +2756,18 @@ function AdminDashboard() {
                 {pendingAppointments && pendingAppointments.length > 0 ? (
                   <div className="space-y-3">
                     {pendingAppointments.slice(0, 5).map((apt: any) => (
-                      <div key={apt.id} className="pb-3 border-b last:border-0">
+                      <button
+                        key={apt.id}
+                        type="button"
+                        onClick={() =>
+                          setLocation(
+                            `/appointments-admin?appointmentId=${encodeURIComponent(
+                              apt.id
+                            )}`
+                          )
+                        }
+                        className="w-full text-left pb-3 border-b last:border-0 rounded-md hover:bg-accent/40 transition-colors"
+                      >
                         <div className="flex items-center justify-between mb-1">
                           <p className="text-sm font-medium">
                             Appointment #{apt.id.slice(0, 8)}
@@ -1792,9 +2775,17 @@ function AdminDashboard() {
                           <Badge variant="outline">{apt.status}</Badge>
                         </div>
                         <p className="text-xs text-muted-foreground">
+                          {(apt?.patient?.user?.firstName || "").trim()}{" "}
+                          {(apt?.patient?.user?.lastName || "").trim()}
+                          {"  "}
+                          <span className="mx-1">•</span>
+                          {(apt?.doctor?.user?.firstName || "").trim()}{" "}
+                          {(apt?.doctor?.user?.lastName || "").trim()}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
                           {new Date(apt.appointmentDate).toLocaleString()}
                         </p>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 ) : (
@@ -1809,93 +2800,113 @@ function AdminDashboard() {
       </div>
 
       {/* Recent Users Table */}
-      {isWidgetVisible("recentUsers") &&
-        stats?.recentUsers &&
-        stats.recentUsers.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Recent Users</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {stats.recentUsers.map((user: any) => (
-                  <div
-                    key={user.id}
-                    className="flex items-center justify-between py-2 border-b last:border-0"
-                  >
-                    <div>
-                      <p className="font-medium">
-                        {user.firstName} {user.lastName}
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        {user.email}
-                      </p>
-                    </div>
-                    <Badge variant="outline">{user.role}</Badge>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-      {/* Add User Dialog */}
-      <Dialog open={showAddUserDialog} onOpenChange={setShowAddUserDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add New User</DialogTitle>
-            <DialogDescription>
-              To add a new user, please navigate to User Management.
-            </DialogDescription>
-          </DialogHeader>
-          <Button
-            onClick={() => {
-              setShowAddUserDialog(false);
-              setLocation("/admin/users");
-            }}
-          >
-            Go to User Management
-          </Button>
-        </DialogContent>
-      </Dialog>
-
-      {/* Critical Alerts Dialog */}
-      <Dialog open={showAlertsDialog} onOpenChange={setShowAlertsDialog}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Critical Alerts</DialogTitle>
-            <DialogDescription>
-              System alerts and warnings that require attention
-            </DialogDescription>
-          </DialogHeader>
-          <ScrollArea className="h-[400px]">
-            <div className="space-y-3">
-              {pendingAppointments && pendingAppointments.length > 0 && (
-                <div className="mt-4">
-                  <h3 className="font-semibold mb-2 flex items-center gap-2">
-                    <Calendar className="w-4 h-4" />
-                    Pending Appointments
-                  </h3>
-                  <p className="ml-6 text-sm text-muted-foreground">
-                    {pendingAppointments.length} appointments awaiting approval
-                  </p>
-                </div>
-              )}
-              {systemHealth?.database !== "healthy" && (
-                <div className="mt-4">
-                  <h3 className="font-semibold mb-2 flex items-center gap-2 text-destructive">
-                    <Database className="w-4 h-4" />
-                    Database Warning
-                  </h3>
-                  <p className="ml-6 text-sm">
-                    Database connection is experiencing issues
-                  </p>
-                </div>
-              )}
+      {isWidgetVisible("recentUsers") && (
+        <Card>
+          <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
+            <div>
+              <CardTitle>Recent Visits</CardTitle>
+              <CardDescription>All visits in the last 24 hours</CardDescription>
             </div>
-          </ScrollArea>
-        </DialogContent>
-      </Dialog>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => refetchRecentVisits()}
+              disabled={isFetchingRecentVisits}
+            >
+              <RefreshCw
+                className={
+                  isFetchingRecentVisits
+                    ? "w-4 h-4 mr-2 animate-spin"
+                    : "w-4 h-4 mr-2"
+                }
+              />
+              Refresh
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div className="w-full sm:w-[200px]">
+                  <Select
+                    value={recentVisitsRole}
+                    onValueChange={(v) => setRecentVisitsRole(v)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Role" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All roles</SelectItem>
+                      {availableRecentVisitRoles.map((role) => (
+                        <SelectItem key={role} value={role}>
+                          {role}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <Input
+                  className="w-full sm:w-[260px]"
+                  placeholder="Search name, email, page..."
+                  value={recentVisitsSearch}
+                  onChange={(e) => setRecentVisitsSearch(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <ScrollArea className="h-[320px]">
+              {filteredRecentVisits.length > 0 ? (
+                <div className="space-y-4">
+                  {filteredRecentVisits.map((visit: any) => {
+                    const ts = visit?.timestamp ?? null;
+                    const visitedAt = formatSriLankaDateTime(ts);
+
+                    const u = visit?.user;
+                    const name = u
+                      ? [u.firstName, u.lastName].filter(Boolean).join(" ") ||
+                        u.username ||
+                        u.email ||
+                        "User"
+                      : "Unregistered User";
+                    const email = u?.email ? String(u.email) : "";
+                    const role = u?.role ? String(u.role) : "unregistered";
+
+                    return (
+                      <div
+                        key={visit.id}
+                        className="flex items-center justify-between py-2 border-b last:border-0"
+                      >
+                        <div>
+                          <p className="font-medium">{name}</p>
+                          {email ? (
+                            <p className="text-sm text-muted-foreground">
+                              {email}
+                            </p>
+                          ) : null}
+                          <p className="text-xs text-muted-foreground">
+                            Visited: {visitedAt}
+                          </p>
+                        </div>
+                        <Badge variant="outline">{role}</Badge>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-center py-12 text-muted-foreground">
+                  No recent visits
+                </div>
+              )}
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      )}
+
+      <AdminAddUserDialog
+        open={showAddUserDialog}
+        onOpenChange={setShowAddUserDialog}
+      />
     </div>
   );
 }

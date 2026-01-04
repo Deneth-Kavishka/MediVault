@@ -36,10 +36,15 @@ const DEFAULT_WIDGETS: WidgetConfig[] = [
     visible: true,
     order: 3,
   },
-  { id: "revenueChart", title: "Revenue Chart", visible: true, order: 4 },
   {
     id: "userGrowthChart",
     title: "User Growth Chart",
+    visible: true,
+    order: 4,
+  },
+  {
+    id: "systemUsageChart",
+    title: "System Traffic Chart",
     visible: true,
     order: 5,
   },
@@ -58,6 +63,19 @@ const DEFAULT_WIDGETS: WidgetConfig[] = [
   { id: "recentUsers", title: "Recent Users", visible: true, order: 8 },
 ];
 
+function mergeWidgets(defaults: WidgetConfig[], saved?: WidgetConfig[]) {
+  if (!saved || saved.length === 0) return defaults;
+
+  const savedById = new Map(saved.map((w) => [w.id, w]));
+  return defaults
+    .map((d) => {
+      const s = savedById.get(d.id);
+      return s ? { ...d, visible: s.visible, order: s.order } : d;
+    })
+    .sort((a, b) => a.order - b.order)
+    .map((w, i) => ({ ...w, order: i + 1 }));
+}
+
 export function DashboardCustomization() {
   const { toast } = useToast();
   const [widgets, setWidgets] = useState<WidgetConfig[]>(DEFAULT_WIDGETS);
@@ -69,7 +87,7 @@ export function DashboardCustomization() {
     if (saved) {
       try {
         const prefs: DashboardPreferences = JSON.parse(saved);
-        setWidgets(prefs.widgets);
+        setWidgets(mergeWidgets(DEFAULT_WIDGETS, prefs.widgets));
       } catch (error) {
         console.error("Failed to load dashboard preferences:", error);
       }
@@ -237,8 +255,11 @@ export function useDashboardPreferences() {
     const saved = localStorage.getItem("dashboardPreferences");
     if (saved) {
       try {
-        const prefs = JSON.parse(saved);
-        setPreferences(prefs);
+        const prefs: DashboardPreferences = JSON.parse(saved);
+        setPreferences({
+          ...prefs,
+          widgets: mergeWidgets(DEFAULT_WIDGETS, prefs.widgets),
+        });
       } catch (error) {
         console.error("Failed to load dashboard preferences:", error);
       }
