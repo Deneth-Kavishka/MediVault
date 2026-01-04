@@ -28,6 +28,7 @@ import {
 import { queryClient } from "@/lib/queryClient";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTheme } from "@/components/theme-provider";
+import { ForgotPasswordDialog } from "@/components/forgot-password-dialog";
 
 export default function LoginPage() {
   const [, setLocation] = useLocation();
@@ -637,6 +638,10 @@ export default function LoginPage() {
                     transition={{ delay: 0.8 }}
                     className="w-full space-y-3"
                   >
+                    <div className="text-center text-sm text-gray-600 dark:text-gray-300 flex items-center justify-center gap-2">
+                      <ForgotPasswordDialog />
+                    </div>
+
                     <div className="text-center text-sm text-gray-600 dark:text-gray-300">
                       Don't you have a patient account?{" "}
                       <button

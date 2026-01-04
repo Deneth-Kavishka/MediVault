@@ -14,7 +14,6 @@ import {
   MessageSquare,
   Bell,
   LayoutDashboard,
-  LogOut,
   Shield,
   FileBarChart,
   UsersRound,
@@ -33,8 +32,16 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
+
+type MenuItem = {
+  title: string;
+  url: string;
+  icon: React.ForwardRefExoticComponent<
+    Omit<import("lucide-react").LucideProps, "ref"> &
+      React.RefAttributes<SVGSVGElement>
+  >;
+  badge?: number;
+};
 
 export function AppSidebar() {
   const [location] = useLocation();
@@ -50,20 +57,10 @@ export function AppSidebar() {
   // Calculate unread count
   const unreadCount = notifications.filter((n: any) => !n.isRead).length;
 
-  const handleLogout = async () => {
-    try {
-      await fetch("/api/logout", { method: "POST" });
-      window.location.href = "/";
-    } catch (error) {
-      console.error("Logout error:", error);
-      window.location.href = "/";
-    }
-  };
-
-  const getMenuItems = () => {
+  const getMenuItems = (): MenuItem[] => {
     const role = user?.role;
 
-    const commonItems = [
+    const commonItems: MenuItem[] = [
       { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
       { title: "Messages", url: "/messages", icon: MessageSquare },
       {
@@ -74,7 +71,7 @@ export function AppSidebar() {
       },
     ];
 
-    const roleItems = {
+    const roleItems: Record<string, MenuItem[]> = {
       patient: [
         { title: "Find Doctors", url: "/find-doctors", icon: Search },
         { title: "Appointments", url: "/appointments", icon: Calendar },
@@ -114,6 +111,11 @@ export function AppSidebar() {
           url: "/admin/doctor-availability",
           icon: MapPin,
         },
+        {
+          title: "Password Resets",
+          url: "/admin/password-reset-requests",
+          icon: Shield,
+        },
         { title: "Patients", url: "/patients", icon: Users },
         { title: "Doctors", url: "/doctors", icon: Users },
         { title: "Appointments", url: "/appointments-admin", icon: Calendar },
@@ -122,10 +124,7 @@ export function AppSidebar() {
       ],
     };
 
-    return [
-      ...commonItems,
-      ...(roleItems[role as keyof typeof roleItems] || []),
-    ];
+    return [...commonItems, ...(role ? roleItems[role] || [] : [])];
   };
 
   const menuItems = getMenuItems();
@@ -141,7 +140,8 @@ export function AppSidebar() {
             <h2 className="text-lg font-semibold text-sidebar-foreground">
               MediVault
             </h2>
-            <p className="text-xs text-muted-foreground capitalize">
+            <p className="text-[10px] font-medium text-primary/80">V1.0</p>
+            <p className="text-xs text-muted-foreground capitalize mt-0.5">
               {user?.role?.replace("_", " ")}
             </p>
           </div>
@@ -180,34 +180,9 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border p-4">
-        <div className="flex items-center gap-3">
-          <Avatar className="w-9 h-9">
-            <AvatarImage
-              src={user?.profileImageUrl || undefined}
-              alt={user?.firstName || "User"}
-            />
-            <AvatarFallback className="bg-primary/10 text-primary text-sm">
-              {user?.firstName?.[0] || "U"}
-              {user?.lastName?.[0] || ""}
-            </AvatarFallback>
-          </Avatar>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-sidebar-foreground truncate">
-              {user?.firstName || ""} {user?.lastName || ""}
-            </p>
-            <p className="text-xs text-muted-foreground truncate">
-              {user?.email}
-            </p>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={handleLogout}
-            className="h-9 w-9"
-            title="Logout"
-          >
-            <LogOut className="h-4 w-4" />
-          </Button>
+        <div className="text-center text-[10px] text-muted-foreground/70">
+          <p>© {new Date().getFullYear()} MediVault Healthcare</p>
+          <p className="mt-0.5">All rights reserved</p>
         </div>
       </SidebarFooter>
     </Sidebar>

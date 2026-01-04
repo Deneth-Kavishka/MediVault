@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { LogOut } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -249,18 +250,38 @@ export function ProfileMenu() {
             </Avatar>
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuLabel>
-            {user?.firstName || user?.lastName
-              ? `${user?.firstName || ""} ${user?.lastName || ""}`.trim()
-              : user?.username}
-          </DropdownMenuLabel>
+        <DropdownMenuContent align="end" className="w-80">
+          {/* Profile Header Section - Google Style */}
+          <div className="flex flex-col items-center p-4 space-y-3">
+            <Avatar className="h-20 w-20">
+              <AvatarImage src={avatarUrl} alt="Profile" />
+              <AvatarFallback className="text-2xl">{fallback}</AvatarFallback>
+            </Avatar>
+            <div className="text-center space-y-1">
+              <p className="text-base font-semibold text-foreground">
+                {user?.firstName || user?.lastName
+                  ? `${user?.firstName || ""} ${user?.lastName || ""}`.trim()
+                  : user?.username}
+              </p>
+              <p className="text-sm text-muted-foreground">{user?.email}</p>
+              {user?.role && (
+                <div className="flex justify-center pt-1">
+                  <span className="inline-flex items-center rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary capitalize">
+                    {user.role.replace("_", " ")}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
           <DropdownMenuSeparator />
+
           <DropdownMenuItem
             onSelect={(e) => {
               e.preventDefault();
               setLocation("/profile");
             }}
+            className="cursor-pointer"
           >
             My Profile
           </DropdownMenuItem>
@@ -274,8 +295,28 @@ export function ProfileMenu() {
               setUsernameStatus("idle");
               setOpen(true);
             }}
+            className="cursor-pointer"
           >
             Profile settings
+          </DropdownMenuItem>
+
+          <DropdownMenuSeparator />
+
+          <DropdownMenuItem
+            onSelect={async (e) => {
+              e.preventDefault();
+              try {
+                await fetch("/api/logout", { method: "POST" });
+                window.location.href = "/";
+              } catch (error) {
+                console.error("Logout error:", error);
+                window.location.href = "/";
+              }
+            }}
+            className="text-destructive focus:text-destructive cursor-pointer"
+          >
+            <LogOut className="mr-2 h-4 w-4" />
+            Logout
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

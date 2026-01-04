@@ -25,6 +25,7 @@ import Messages from "@/pages/messages";
 import AdminUsers from "@/pages/admin-users";
 import AdminDoctorAvailability from "@/pages/admin-doctor-availability";
 import AdminPatients from "@/pages/admin-patients";
+import AdminPasswordResetRequests from "@/pages/admin-password-reset-requests";
 import DoctorPatients from "@/pages/doctor-patients";
 import DoctorMedicalRecords from "@/pages/doctor-medical-records";
 import DoctorAvailability from "@/pages/doctor-availability";
@@ -242,6 +243,10 @@ function Router() {
         path="/admin/doctor-availability"
         component={AdminDoctorAvailability}
       />
+      <Route
+        path="/admin/password-reset-requests"
+        component={AdminPasswordResetRequests}
+      />
       <Route path="/doctor/availability" component={DoctorAvailability} />
       <Route path="/find-doctors" component={FindDoctors} />
       <Route path="/users" component={Dashboard} />
@@ -295,7 +300,7 @@ function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider defaultTheme="light">
+      <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
           <AuthenticatedLayout>
             <Router />

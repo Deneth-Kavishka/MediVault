@@ -113,6 +113,39 @@ export const patientRegistrationRequests = pgTable(
 );
 
 // ============================================================================
+// PASSWORD RESET REQUESTS (Admin-approved password recovery)
+// ============================================================================
+
+export const passwordResetRequests = pgTable(
+  "password_reset_requests",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: varchar("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    email: varchar("email").notNull(),
+    username: varchar("username").notNull(),
+    fullName: varchar("full_name"),
+    status: varchar("status").notNull().default("pending"), // 'pending' | 'approved' | 'rejected'
+    temporaryPassword: varchar("temporary_password"), // Hashed temporary password (set when approved)
+    requestedAt: timestamp("requested_at").defaultNow(),
+    processedAt: timestamp("processed_at"),
+    processedBy: varchar("processed_by").references(() => users.id), // Admin who processed the request
+    adminNotes: text("admin_notes"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_password_reset_requests_user_id").on(table.userId),
+    index("idx_password_reset_requests_status").on(table.status),
+    index("idx_password_reset_requests_email").on(table.email),
+    index("idx_password_reset_requests_requested_at").on(table.requestedAt),
+  ]
+);
+
+// ============================================================================
 // PATIENT TABLE
 // ============================================================================
 
@@ -627,7 +660,8 @@ export const auditLogs = pgTable("audit_logs", {
   entityId: varchar("entity_id"),
   details: text("details"),
   ipAddress: varchar("ip_address"),
-  createdAt: timestamp("created_at").defaultNow(),
+  // Store as timestamptz so JS/date formatting doesn't double-apply offsets.
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
 // ============================================================================
@@ -939,6 +973,19 @@ export const insertPatientRegistrationRequestSchema = createInsertSchema(
     dateOfBirth: z.coerce.date().optional().nullable(),
   });
 
+export const insertPasswordResetRequestSchema = createInsertSchema(
+  passwordResetRequests
+).omit({
+  id: true,
+  status: true,
+  temporaryPassword: true,
+  processedAt: true,
+  processedBy: true,
+  adminNotes: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export const insertProfileChangeRequestSchema = createInsertSchema(
   profileChangeRequests
 );
@@ -1062,6 +1109,11 @@ export type InsertPatientRegistrationRequest = z.infer<
 >;
 export type PatientRegistrationRequest =
   typeof patientRegistrationRequests.$inferSelect;
+
+export type InsertPasswordResetRequest = z.infer<
+  typeof insertPasswordResetRequestSchema
+>;
+export type PasswordResetRequest = typeof passwordResetRequests.$inferSelect;
 
 export type InsertPatient = z.infer<typeof insertPatientSchema>;
 export type Patient = typeof patients.$inferSelect;

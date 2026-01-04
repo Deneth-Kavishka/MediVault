@@ -70,6 +70,13 @@ type AppointmentCancelledEmail = {
   reason: string;
 };
 
+type PasswordResetApprovedEmail = {
+  to: string;
+  fullName?: string | null;
+  username: string;
+  temporaryPassword: string;
+};
+
 function getSmtpConfig() {
   const host = process.env.SMTP_HOST?.trim();
   const portRaw = process.env.SMTP_PORT?.trim();
@@ -632,6 +639,80 @@ export async function sendLoginAlertEmail(payload: LoginAlertEmail) {
   } catch (err: any) {
     const message = err?.response || err?.message || String(err);
     console.error("Login alert email send failed:", message);
+    return { sent: false, error: message };
+  }
+}
+
+export async function sendPasswordResetApprovedEmail(
+  payload: PasswordResetApprovedEmail
+) {
+  const smtp = getSmtpConfig();
+  if (!smtp) {
+    console.warn(
+      "SMTP not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM to enable emails."
+    );
+    return { sent: false, error: "SMTP not configured" };
+  }
+
+  const debugEmail =
+    process.env.DEBUG_EMAIL?.trim().toLowerCase() === "true" ||
+    process.env.DEBUG?.trim().toLowerCase() === "true";
+  if (debugEmail) {
+    console.log(
+      `[email] host=${smtp.host} port=${smtp.port} user=${smtp.user} from=${smtp.from} to=${payload.to}`
+    );
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.port === 465,
+    auth: {
+      user: smtp.user,
+      pass: smtp.pass,
+    },
+  });
+
+  const subject = "MediVault Password Reset Approved";
+
+  const hello = payload.fullName?.trim()
+    ? `Hello ${payload.fullName.trim()},`
+    : "Hello,";
+
+  const lines = [
+    hello,
+    "",
+    "Your password reset request has been approved by an administrator.",
+    "",
+    `Username: ${payload.username}`,
+    `Temporary Password: ${payload.temporaryPassword}`,
+    "",
+    "IMPORTANT SECURITY NOTICE:",
+    "- This is a temporary password for account recovery",
+    "- You will be required to change your password immediately after logging in",
+    "- Please keep this password confidential",
+    "",
+    "Login: http://localhost:5173/login",
+    "",
+    "If you did not request a password reset, please contact an administrator immediately.",
+    "",
+    "Thank you,",
+    "MediVault Admin",
+  ].filter(Boolean);
+
+  const text = lines.join("\n");
+
+  try {
+    await transporter.sendMail({
+      from: smtp.from,
+      to: payload.to,
+      subject,
+      text,
+    });
+    return { sent: true };
+  } catch (err: any) {
+    const message = err?.response || err?.message || String(err);
+    console.error("Password reset email send failed:", message);
     return { sent: false, error: message };
   }
 }

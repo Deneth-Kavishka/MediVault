@@ -97,6 +97,40 @@ const formatSriLankaDateTime = (
   }).format(date);
 };
 
+const SRI_LANKA_UTC_OFFSET_MINUTES = 5 * 60 + 30;
+
+const parseSriLankaDateInputToUtcRange = (
+  dateStr: string
+): { fromIso: string; toIso: string } | null => {
+  // dateStr expected in YYYY-MM-DD from <input type="date" />
+  const m = /^\s*(\d{4})-(\d{2})-(\d{2})\s*$/.exec(dateStr);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day)
+  ) {
+    return null;
+  }
+
+  // Start/end of selected day in Sri Lanka time, expressed as UTC instants.
+  const startUtcMs =
+    Date.UTC(year, month - 1, day, 0, 0, 0, 0) -
+    SRI_LANKA_UTC_OFFSET_MINUTES * 60_000;
+  const endUtcMs =
+    Date.UTC(year, month - 1, day + 1, 0, 0, 0, 0) -
+    SRI_LANKA_UTC_OFFSET_MINUTES * 60_000 -
+    1;
+
+  return {
+    fromIso: new Date(startUtcMs).toISOString(),
+    toIso: new Date(endUtcMs).toISOString(),
+  };
+};
+
 export default function Dashboard() {
   const { user, isLoading, isAuthenticated, authMessage } = useAuth();
   const { toast } = useToast();
@@ -1856,8 +1890,12 @@ function AdminDashboard() {
         ...(activityAction && activityAction !== "all"
           ? { action: activityAction }
           : {}),
-        ...(activityDate ? { from: `${activityDate}T00:00:00.000Z` } : {}),
-        ...(activityDate ? { to: `${activityDate}T23:59:59.999Z` } : {}),
+        ...(activityDate
+          ? (() => {
+              const r = parseSriLankaDateInputToUtcRange(activityDate);
+              return r ? { from: r.fromIso, to: r.toIso } : {};
+            })()
+          : {}),
       }).toString()}`,
     ],
   });
@@ -2243,8 +2281,11 @@ function AdminDashboard() {
           params.action = activityAction;
         }
         if (activityDate) {
-          params.from = `${activityDate}T00:00:00.000Z`;
-          params.to = `${activityDate}T23:59:59.999Z`;
+          const r = parseSriLankaDateInputToUtcRange(activityDate);
+          if (r) {
+            params.from = r.fromIso;
+            params.to = r.toIso;
+          }
         }
       }
 

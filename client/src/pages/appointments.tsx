@@ -76,7 +76,6 @@ type AppointmentFormValues = z.infer<typeof appointmentFormSchema>;
 export default function Appointments() {
   const { user, isLoading, isAuthenticated } = useAuth();
   const { toast } = useToast();
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
 
   useEffect(() => {
@@ -127,22 +126,6 @@ export default function Appointments() {
               {viewMode === "cards" ? "Table View" : "Card View"}
             </Button>
           )}
-          {user?.role === "patient" && (
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
-                <Button data-testid="button-book-appointment">
-                  <Plus className="w-4 h-4 mr-2" />
-                  Book Appointment
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-[500px]">
-                <DialogHeader>
-                  <DialogTitle>Book New Appointment</DialogTitle>
-                </DialogHeader>
-                <BookAppointmentForm onSuccess={() => setIsDialogOpen(false)} />
-              </DialogContent>
-            </Dialog>
-          )}
         </div>
       </div>
 
@@ -150,185 +133,6 @@ export default function Appointments() {
     </div>
   );
 }
-
-function BookAppointmentForm({ onSuccess }: { onSuccess: () => void }) {
-  const { toast } = useToast();
-  const { user } = useAuth();
-
-  // Fetch doctors list
-  const { data: doctors = [], isLoading: loadingDoctors } = useQuery<any[]>({
-    queryKey: ["/api/doctors"],
-  });
-
-  // Fetch patient profile to get patientId
-  const { data: patientProfile } = useQuery<any>({
-    queryKey: ["/api/patients/me"],
-    enabled: user?.role === "patient",
-  });
-
-  const form = useForm<AppointmentFormValues>({
-    resolver: zodResolver(appointmentFormSchema),
-    defaultValues: {
-      doctorId: "",
-      appointmentDate: "",
-      reason: "",
-      notes: "",
-    },
-  });
-
-  const createAppointment = useMutation({
-    mutationFn: async (data: AppointmentFormValues) => {
-      if (!patientProfile?.id) {
-        throw new Error("Patient profile not found");
-      }
-      await apiRequest("POST", "/api/appointments", {
-        ...data,
-        patientId: patientProfile.id,
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
-      toast({
-        title: "Success",
-        description: "Appointment booked successfully",
-      });
-      onSuccess();
-      form.reset();
-    },
-    onError: (error: Error) => {
-      if (isUnauthorizedError(error)) {
-        toast({
-          title: "Unauthorized",
-          description: "You are logged out. Logging in again...",
-          variant: "destructive",
-        });
-        setTimeout(() => (window.location.href = "/login"), 500);
-        return;
-      }
-      toast({
-        title: "Error",
-        description: error.message || "Failed to book appointment",
-        variant: "destructive",
-      });
-    },
-  });
-
-  return (
-    <Form {...form}>
-      <form
-        onSubmit={form.handleSubmit((data) => createAppointment.mutate(data))}
-        className="space-y-4"
-      >
-        <FormField
-          control={form.control}
-          name="doctorId"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Doctor</FormLabel>
-              <Select onValueChange={field.onChange} defaultValue={field.value}>
-                <FormControl>
-                  <SelectTrigger data-testid="select-doctor">
-                    <SelectValue
-                      placeholder={
-                        loadingDoctors
-                          ? "Loading doctors..."
-                          : "Select a doctor"
-                      }
-                    />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  {loadingDoctors ? (
-                    <SelectItem value="loading" disabled>
-                      Loading...
-                    </SelectItem>
-                  ) : doctors.length === 0 ? (
-                    <SelectItem value="none" disabled>
-                      No doctors available
-                    </SelectItem>
-                  ) : (
-                    doctors.map((doctor: any) => (
-                      <SelectItem key={doctor.id} value={doctor.id}>
-                        Dr. {doctor.firstName} {doctor.lastName} -{" "}
-                        {doctor.specialty}
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <FormField
-          control={form.control}
-          name="appointmentDate"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Date & Time</FormLabel>
-              <FormControl>
-                <Input
-                  type="datetime-local"
-                  {...field}
-                  data-testid="input-appointment-date"
-                />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <FormField
-          control={form.control}
-          name="reason"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Reason for Visit</FormLabel>
-              <FormControl>
-                <Input
-                  placeholder="e.g., Regular checkup, Follow-up consultation"
-                  {...field}
-                  data-testid="input-reason"
-                />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <FormField
-          control={form.control}
-          name="notes"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Additional Notes (Optional)</FormLabel>
-              <FormControl>
-                <Textarea
-                  placeholder="Any additional information..."
-                  {...field}
-                  data-testid="input-notes"
-                />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <div className="flex justify-end gap-3">
-          <Button
-            type="submit"
-            disabled={createAppointment.isPending}
-            data-testid="button-submit-appointment"
-          >
-            {createAppointment.isPending ? "Booking..." : "Book Appointment"}
-          </Button>
-        </div>
-      </form>
-    </Form>
-  );
-}
-
 function AppointmentsList() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -1036,8 +840,8 @@ function AppointmentsList() {
       {appointment.status === "pending" && user?.role === "doctor" && (
         <Button
           size="sm"
-          variant="default"
-          className="flex-1 bg-green-600 hover:bg-green-700"
+          variant="outline"
+          className="flex-1 border-green-600 text-green-600 hover:bg-green-50 hover:text-green-700 dark:hover:bg-green-950 h-8 text-xs"
           onClick={() => openApproveDialog(appointment)}
           data-testid={`button-approve-${appointment.id}`}
         >
@@ -1050,8 +854,8 @@ function AppointmentsList() {
         (user?.role === "doctor" || user?.role === "admin") && (
           <Button
             size="sm"
-            variant="default"
-            className="flex-1 bg-blue-600 hover:bg-blue-700 h-8 text-xs"
+            variant="outline"
+            className="flex-1 border-blue-600 text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-950 h-8 text-xs"
             onClick={() => handleCompleteClick(appointment)}
             data-testid={`button-complete-${appointment.id}`}
           >
@@ -1066,8 +870,8 @@ function AppointmentsList() {
         user?.role === "patient" && (
           <Button
             size="sm"
-            variant="destructive"
-            className="w-full h-8 text-xs"
+            variant="outline"
+            className="w-full h-8 text-xs border-red-600 text-red-600 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950"
             onClick={() => openPatientCancelDialog(appointment)}
             data-testid={`button-cancel-${appointment.id}`}
           >
@@ -1080,8 +884,8 @@ function AppointmentsList() {
         user?.role === "doctor" && (
           <Button
             size="sm"
-            variant="destructive"
-            className="flex-1 h-8 text-xs"
+            variant="outline"
+            className="flex-1 h-8 text-xs border-red-600 text-red-600 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950"
             onClick={() => openCancelRequestDialog(appointment)}
             data-testid={`button-request-cancel-${appointment.id}`}
           >
@@ -1094,8 +898,8 @@ function AppointmentsList() {
           <>
             <Button
               size="sm"
-              variant="destructive"
-              className="flex-1"
+              variant="outline"
+              className="flex-1 border-red-600 text-red-600 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950"
               onClick={() => {
                 if (window.confirm("Approve this cancellation request?")) {
                   approveCancellation.mutate(appointment.id);
@@ -1111,7 +915,7 @@ function AppointmentsList() {
             <Button
               size="sm"
               variant="outline"
-              className="flex-1"
+              className="flex-1 border-red-600 text-red-600 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950"
               onClick={() => openRejectDialog(appointment)}
               disabled={rejectCancellation.isPending}
               data-testid={`button-reject-cancel-${appointment.id}`}
@@ -1620,8 +1424,8 @@ function AppointmentsList() {
                           user?.role === "doctor" && (
                             <Button
                               size="sm"
-                              variant="default"
-                              className="flex-1 bg-green-600 hover:bg-green-700"
+                              variant="outline"
+                              className="flex-1 border-green-600 text-green-600 hover:bg-green-50 hover:text-green-700 dark:hover:bg-green-950"
                               onClick={() => openApproveDialog(appointment)}
                               data-testid={`button-approve-${appointment.id}`}
                             >
@@ -1635,8 +1439,8 @@ function AppointmentsList() {
                             user?.role === "admin") && (
                             <Button
                               size="sm"
-                              variant="default"
-                              className="flex-1 bg-blue-600 hover:bg-blue-700"
+                              variant="outline"
+                              className="flex-1 border-blue-600 text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-950"
                               onClick={() => handleCompleteClick(appointment)}
                               data-testid={`button-complete-${appointment.id}`}
                             >
@@ -1651,8 +1455,8 @@ function AppointmentsList() {
                           user?.role === "patient" && (
                             <Button
                               size="sm"
-                              variant="destructive"
-                              className="w-full"
+                              variant="outline"
+                              className="w-full border-red-600 text-red-600 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950"
                               onClick={() =>
                                 openPatientCancelDialog(appointment)
                               }
@@ -1668,8 +1472,8 @@ function AppointmentsList() {
                           user?.role === "doctor" && (
                             <Button
                               size="sm"
-                              variant="destructive"
-                              className="flex-1"
+                              variant="outline"
+                              className="flex-1 border-red-600 text-red-600 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950"
                               onClick={() =>
                                 openCancelRequestDialog(appointment)
                               }
@@ -1685,8 +1489,8 @@ function AppointmentsList() {
                             <>
                               <Button
                                 size="sm"
-                                variant="destructive"
-                                className="flex-1"
+                                variant="outline"
+                                className="flex-1 border-red-600 text-red-600 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950"
                                 onClick={() => {
                                   if (
                                     window.confirm(
@@ -1706,7 +1510,7 @@ function AppointmentsList() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="flex-1"
+                                className="flex-1 border-red-600 text-red-600 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950"
                                 onClick={() => openRejectDialog(appointment)}
                                 disabled={rejectCancellation.isPending}
                                 data-testid={`button-reject-cancel-${appointment.id}`}
@@ -1908,7 +1712,8 @@ function AppointmentsList() {
                   Cancel
                 </Button>
                 <Button
-                  className="flex-1 bg-green-600 hover:bg-green-700"
+                  variant="outline"
+                  className="flex-1 border-green-600 text-green-600 hover:bg-green-50 hover:text-green-700 dark:hover:bg-green-950"
                   onClick={handleApproveSubmit}
                   disabled={
                     approveAppointment.isPending || !appointmentTime.trim()

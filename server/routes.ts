@@ -14,6 +14,7 @@ import {
   sendAccountDeactivatedEmail,
   sendAccountReactivatedEmail,
   sendAppointmentCancelledEmail,
+  sendPasswordResetApprovedEmail,
 } from "./email";
 import { generatePatientAssistantReply } from "./gemini";
 // Use local authentication
@@ -50,6 +51,7 @@ import {
   appointments,
   patients,
   patientRegistrationRequests,
+  passwordResetRequests,
   doctorAvailability,
   labTechnicians,
   labFacilities,
@@ -1651,6 +1653,260 @@ export async function registerRoutes(app: Express): Promise<Server> {
   );
 
   // ============================================================================
+  // PASSWORD RESET ROUTES (Admin-approved password recovery)
+  // ============================================================================
+
+  // Submit password reset request (available to all - no authentication required)
+  app.post("/api/password-reset/request", async (req, res) => {
+    try {
+      const { emailOrUsername } = req.body;
+
+      if (!emailOrUsername || typeof emailOrUsername !== "string") {
+        return res.status(400).json({
+          message: "Email or username is required",
+        });
+      }
+
+      const identifier = emailOrUsername.trim().toLowerCase();
+
+      // Find user by email or username
+      const userRows = await db
+        .select()
+        .from(users)
+        .where(
+          or(
+            eq(sql`LOWER(${users.email})`, identifier),
+            eq(sql`LOWER(${users.username})`, identifier)
+          )
+        )
+        .limit(1);
+
+      const user = userRows[0];
+
+      // Always return success to prevent user enumeration
+      if (!user) {
+        return res.json({
+          message:
+            "If an account exists with that information, a password reset request will be sent to the administrator for approval.",
+        });
+      }
+
+      // Check if user account is active
+      if (!user.isActive) {
+        return res.json({
+          message:
+            "If an account exists with that information, a password reset request will be sent to the administrator for approval.",
+        });
+      }
+
+      // Check if there's already a pending request
+      const existingRequest = await db
+        .select()
+        .from(passwordResetRequests)
+        .where(
+          and(
+            eq(passwordResetRequests.userId, user.id),
+            eq(passwordResetRequests.status, "pending")
+          )
+        )
+        .limit(1);
+
+      if (existingRequest.length > 0) {
+        return res.json({
+          message:
+            "A password reset request is already pending. Please wait for admin approval.",
+        });
+      }
+
+      // Create password reset request
+      const fullName = `${user.firstName || ""} ${user.lastName || ""}`.trim();
+
+      await db.insert(passwordResetRequests).values({
+        userId: user.id,
+        email: user.email || "",
+        username: user.username,
+        fullName: fullName || null,
+        status: "pending",
+      });
+
+      return res.json({
+        message:
+          "Password reset request submitted successfully. An administrator will review your request shortly.",
+      });
+    } catch (error: any) {
+      console.error("Error creating password reset request:", error);
+      return res.status(500).json({
+        message: "Failed to submit password reset request",
+      });
+    }
+  });
+
+  // Get all password reset requests (admin only)
+  app.get(
+    "/api/password-reset/requests",
+    isAuthenticated,
+    isAdmin,
+    async (req, res) => {
+      try {
+        const status =
+          typeof req.query.status === "string" ? req.query.status : undefined;
+
+        const requests = await db
+          .select()
+          .from(passwordResetRequests)
+          .where(status ? eq(passwordResetRequests.status, status) : sql`TRUE`)
+          .orderBy(desc(passwordResetRequests.requestedAt));
+
+        return res.json(requests);
+      } catch (error: any) {
+        console.error("Error fetching password reset requests:", error);
+        return res.status(500).json({
+          message: "Failed to fetch password reset requests",
+        });
+      }
+    }
+  );
+
+  // Approve password reset request (admin only)
+  app.post(
+    "/api/password-reset/requests/:id/approve",
+    isAuthenticated,
+    isAdmin,
+    async (req: any, res) => {
+      try {
+        const requestId = req.params.id;
+        const adminUserId = req.user.id;
+
+        const requestRows = await db
+          .select()
+          .from(passwordResetRequests)
+          .where(eq(passwordResetRequests.id, requestId))
+          .limit(1);
+
+        const request = requestRows[0];
+        if (!request) {
+          return res.status(404).json({
+            message: "Password reset request not found",
+          });
+        }
+
+        if (request.status !== "pending") {
+          return res.status(400).json({
+            message: `Request is already ${request.status}`,
+          });
+        }
+
+        // Generate temporary password
+        const tempPassword = randomBytes(8).toString("hex"); // 16 character hex
+        const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+        // Update user with new password and force password change
+        await db
+          .update(users)
+          .set({
+            password: hashedPassword,
+            mustChangePassword: true,
+            updatedAt: new Date(),
+          })
+          .where(eq(users.id, request.userId));
+
+        // Update request status
+        await db
+          .update(passwordResetRequests)
+          .set({
+            status: "approved",
+            temporaryPassword: hashedPassword,
+            processedAt: new Date(),
+            processedBy: adminUserId,
+            updatedAt: new Date(),
+          })
+          .where(eq(passwordResetRequests.id, requestId));
+
+        // Send email with temporary password
+        if (request.email) {
+          const emailResult = await sendPasswordResetApprovedEmail({
+            to: request.email,
+            fullName: request.fullName || null,
+            username: request.username,
+            temporaryPassword: tempPassword,
+          });
+
+          if (!emailResult.sent) {
+            console.warn(
+              "Password reset approved but email failed:",
+              emailResult.error
+            );
+          }
+        }
+
+        return res.json({
+          message:
+            "Password reset approved. Temporary password has been sent to the user's email.",
+        });
+      } catch (error: any) {
+        console.error("Error approving password reset:", error);
+        return res.status(500).json({
+          message: "Failed to approve password reset request",
+        });
+      }
+    }
+  );
+
+  // Reject password reset request (admin only)
+  app.post(
+    "/api/password-reset/requests/:id/reject",
+    isAuthenticated,
+    isAdmin,
+    async (req: any, res) => {
+      try {
+        const requestId = req.params.id;
+        const adminUserId = req.user.id;
+        const { adminNotes } = req.body;
+
+        const requestRows = await db
+          .select()
+          .from(passwordResetRequests)
+          .where(eq(passwordResetRequests.id, requestId))
+          .limit(1);
+
+        const request = requestRows[0];
+        if (!request) {
+          return res.status(404).json({
+            message: "Password reset request not found",
+          });
+        }
+
+        if (request.status !== "pending") {
+          return res.status(400).json({
+            message: `Request is already ${request.status}`,
+          });
+        }
+
+        // Update request status
+        await db
+          .update(passwordResetRequests)
+          .set({
+            status: "rejected",
+            processedAt: new Date(),
+            processedBy: adminUserId,
+            adminNotes: adminNotes || null,
+            updatedAt: new Date(),
+          })
+          .where(eq(passwordResetRequests.id, requestId));
+
+        return res.json({
+          message: "Password reset request rejected",
+        });
+      } catch (error: any) {
+        console.error("Error rejecting password reset:", error);
+        return res.status(500).json({
+          message: "Failed to reject password reset request",
+        });
+      }
+    }
+  );
+
+  // ============================================================================
   // PATIENT ROUTES
   // ============================================================================
   app.post("/api/patients", isAuthenticated, async (req: any, res) => {
@@ -2795,15 +3051,93 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
   app.post("/api/appointments", isAuthenticated, async (req: any, res) => {
     try {
+      const authUserId = req.user?.id;
+      const authUser = authUserId ? await storage.getUser(authUserId) : null;
+
+      // Patients can only create appointments for themselves.
+      // Also used for duplicate-slot checks.
+      let effectivePatientId: string | undefined = req.body?.patientId;
+      if (authUser?.role === "patient") {
+        const patient = await storage.getPatientByUserId(authUserId);
+        if (!patient) {
+          return res.status(400).json({
+            message:
+              "Patient profile not found. Please complete your patient profile before booking an appointment.",
+          });
+        }
+        effectivePatientId = patient.id;
+      }
+
+      // If an availability slot is provided, validate it and prevent duplicate bookings
+      // for the same patient + availability slot.
+      if (req.body?.availabilityId) {
+        const availability = await storage.getDoctorAvailability(
+          req.body.availabilityId
+        );
+
+        if (!availability) {
+          return res.status(400).json({
+            message: "Selected availability slot was not found.",
+          });
+        }
+
+        // Ensure doctorId matches the availability slot.
+        if (req.body?.doctorId && availability.doctorId !== req.body.doctorId) {
+          return res.status(400).json({
+            message: "Selected doctor does not match the availability slot.",
+          });
+        }
+
+        // Block booking inactive/deleted slots (best-effort; client also checks).
+        if (
+          (availability as any)?.status === "deleted" ||
+          !availability.isActive
+        ) {
+          return res.status(400).json({
+            message: "This availability slot is no longer available.",
+          });
+        }
+
+        // Capacity check.
+        if (availability.bookedCount >= availability.maxPatients) {
+          return res.status(400).json({
+            message: "This availability slot is fully booked.",
+          });
+        }
+
+        // Duplicate booking check (reduce repetition): a patient can book an availability slot only once.
+        if (authUser?.role === "patient" && effectivePatientId) {
+          const existing = await db
+            .select({ id: appointments.id })
+            .from(appointments)
+            .where(
+              and(
+                eq(appointments.patientId, effectivePatientId),
+                eq(appointments.availabilityId, req.body.availabilityId),
+                ne(appointments.status, "cancelled")
+              )
+            )
+            .limit(1);
+
+          if (existing.length > 0) {
+            return res.status(409).json({
+              message:
+                "You have already booked this doctor's availability slot. Please choose a different time.",
+            });
+          }
+        }
+      }
+
       const validatedData = insertAppointmentSchema.parse({
         ...req.body,
+        patientId: effectivePatientId,
         appointmentDate: new Date(req.body.appointmentDate), // Convert string to Date
         status: "pending", // Default status
       });
       const appointment = await storage.createAppointment(validatedData);
 
       // Get doctor's userId for notification
-      const doctor = await storage.getDoctor(req.body.doctorId);
+      const doctor = await storage.getDoctor(validatedData.doctorId);
 
       if (doctor) {
         // Create notification for doctor
