@@ -7,7 +7,46 @@ import { Strategy as LocalStrategy } from "passport-local";
 import bcrypt from "bcryptjs";
 import { db } from "./db";
 import { users } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { eq, or, sql } from "drizzle-orm";
+import geoip from "geoip-lite";
+import { sendLoginAlertEmail } from "./email";
+
+function getClientIp(req: any): string | null {
+  const xForwardedFor = req.headers?.["x-forwarded-for"];
+  const fromHeader = Array.isArray(xForwardedFor)
+    ? xForwardedFor[0]
+    : typeof xForwardedFor === "string"
+    ? xForwardedFor
+    : null;
+
+  const ipRaw =
+    (fromHeader ? fromHeader.split(",")[0]?.trim() : null) ||
+    (typeof req.headers?.["x-real-ip"] === "string"
+      ? req.headers["x-real-ip"].trim()
+      : null) ||
+    (typeof req.ip === "string" ? req.ip : null) ||
+    (typeof req.socket?.remoteAddress === "string"
+      ? req.socket.remoteAddress
+      : null);
+
+  if (!ipRaw) return null;
+  const ip = ipRaw.replace(/^::ffff:/, "");
+  if (ip === "::1" || ip === "127.0.0.1") return ip;
+  return ip;
+}
+
+function getGeoLocationFromIp(ip: string | null): string | null {
+  if (!ip) return null;
+  if (ip === "::1" || ip === "127.0.0.1") return "Localhost";
+  try {
+    const geo = geoip.lookup(ip);
+    if (!geo) return null;
+    const parts = [geo.city, geo.region, geo.country].filter(Boolean);
+    return parts.length ? parts.join(", ") : geo.country || null;
+  } catch {
+    return null;
+  }
+}
 
 // Session configuration
 export function getSession() {
@@ -41,17 +80,31 @@ export function setupAuth(app: Express) {
   passport.use(
     new LocalStrategy(async (username, password, done) => {
       try {
-        // Find user by username
+        const identifier = String(username || "").trim();
+        if (!identifier) {
+          return done(null, false, {
+            message: "Username or email is required.",
+          });
+        }
+
+        // Find user by username OR email
         const userResults = await db
           .select()
           .from(users)
-          .where(eq(users.username, username))
+          .where(
+            or(
+              eq(users.username, identifier),
+              sql`lower(${users.email}) = ${identifier.toLowerCase()}`
+            )
+          )
           .limit(1);
 
         const user = userResults[0];
 
         if (!user) {
-          return done(null, false, { message: "Incorrect username." });
+          return done(null, false, {
+            message: "Incorrect username or email.",
+          });
         }
 
         // Check if user is active
@@ -122,6 +175,34 @@ export function setupAuth(app: Express) {
         if (err) {
           return res.status(500).json({ message: "Login error" });
         }
+
+        // Best-effort login alert email (do not block login).
+        try {
+          const to = typeof user.email === "string" ? user.email.trim() : "";
+          if (to) {
+            const ip = getClientIp(req);
+            const location = getGeoLocationFromIp(ip);
+            const userAgent =
+              typeof req.headers?.["user-agent"] === "string"
+                ? req.headers["user-agent"]
+                : null;
+
+            void sendLoginAlertEmail({
+              to,
+              username: user.username,
+              fullName:
+                [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+                null,
+              timeIso: new Date().toISOString(),
+              ipAddress: ip,
+              location,
+              userAgent,
+            });
+          }
+        } catch (emailErr) {
+          console.warn("Login alert email failed:", emailErr);
+        }
+
         return res.json({
           message: "Login successful",
           user: user,

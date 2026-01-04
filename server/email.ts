@@ -35,6 +35,16 @@ type SensitiveChangeRejectedEmail = {
   adminNotes?: string | null;
 };
 
+type LoginAlertEmail = {
+  to: string;
+  username: string;
+  fullName?: string | null;
+  timeIso: string;
+  ipAddress?: string | null;
+  location?: string | null;
+  userAgent?: string | null;
+};
+
 function getSmtpConfig() {
   const host = process.env.SMTP_HOST?.trim();
   const portRaw = process.env.SMTP_PORT?.trim();
@@ -317,6 +327,77 @@ export async function sendSensitiveChangeRejectedEmail(
   } catch (err: any) {
     const message = err?.response || err?.message || String(err);
     console.error("Sensitive-change rejected email send failed:", message);
+    return { sent: false, error: message };
+  }
+}
+
+export async function sendLoginAlertEmail(payload: LoginAlertEmail) {
+  const smtp = getSmtpConfig();
+  if (!smtp) {
+    console.warn(
+      "SMTP not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM to enable emails."
+    );
+    return { sent: false, error: "SMTP not configured" };
+  }
+
+  const debugEmail =
+    process.env.DEBUG_EMAIL?.trim().toLowerCase() === "true" ||
+    process.env.DEBUG?.trim().toLowerCase() === "true";
+  if (debugEmail) {
+    console.log(
+      `[email] host=${smtp.host} port=${smtp.port} user=${smtp.user} from=${smtp.from} to=${payload.to}`
+    );
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.port === 465,
+    auth: {
+      user: smtp.user,
+      pass: smtp.pass,
+    },
+  });
+
+  const subject = "MediVault Login Alert";
+
+  const hello = payload.fullName?.trim()
+    ? `Hello ${payload.fullName.trim()},`
+    : "Hello,";
+
+  const lines = [
+    hello,
+    "",
+    "We noticed a successful login to your MediVault account.",
+    "",
+    `Username: ${payload.username}`,
+    `Date/Time (UTC): ${payload.timeIso}`,
+    payload.ipAddress ? `IP Address: ${payload.ipAddress}` : undefined,
+    payload.location ? `Approx. Location: ${payload.location}` : undefined,
+    payload.userAgent
+      ? `Device/Browser (User-Agent): ${payload.userAgent}`
+      : undefined,
+    "",
+    "If this was you, you can ignore this email.",
+    "If this wasn't you, please contact an administrator and change your password immediately.",
+    "",
+    "Thank you,",
+    "MediVault Security",
+  ].filter(Boolean);
+
+  const text = lines.join("\n");
+
+  try {
+    await transporter.sendMail({
+      from: smtp.from,
+      to: payload.to,
+      subject,
+      text,
+    });
+    return { sent: true };
+  } catch (err: any) {
+    const message = err?.response || err?.message || String(err);
+    console.error("Login alert email send failed:", message);
     return { sent: false, error: message };
   }
 }

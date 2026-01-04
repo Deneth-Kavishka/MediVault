@@ -527,13 +527,13 @@ export default function LoginPage() {
                       htmlFor="username"
                       className="text-sm font-medium text-gray-700 dark:text-gray-300"
                     >
-                      Username
+                      Username or Email
                     </Label>
                     <div className="relative group">
                       <Input
                         id="username"
                         type="text"
-                        placeholder="Enter your username"
+                        placeholder="Enter your username or email"
                         value={username}
                         onChange={(e) => setUsername(e.target.value)}
                         required
