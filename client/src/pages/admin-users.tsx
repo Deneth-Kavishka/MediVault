@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
@@ -46,6 +46,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Search,
   UserPlus,
@@ -54,10 +55,12 @@ import {
   Users,
   UserX,
   RefreshCw,
+  Scan,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToastAction } from "@/components/ui/toast";
+import { isWebSerialSupported, scanRfidOnce } from "@/lib/rfid-serial";
 
 interface User {
   id: string;
@@ -73,6 +76,23 @@ interface User {
   roleData?: any; // Role-specific data (patient, doctor, etc.)
 }
 
+interface ProfileChangeRequest {
+  id: string;
+  requesterUserId: string;
+  role: string;
+  field: string;
+  oldValue?: string | null;
+  newValue: string;
+  reason?: string | null;
+  status: string;
+  adminNotes?: string | null;
+  createdAt?: string | null;
+  requesterUsername?: string | null;
+  requesterEmail?: string | null;
+  requesterFirstName?: string | null;
+  requesterLastName?: string | null;
+}
+
 const roleColors: Record<string, string> = {
   admin: "bg-red-500",
   doctor: "bg-blue-500",
@@ -84,6 +104,33 @@ const roleColors: Record<string, string> = {
 export default function AdminUsers() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  const [isAddRfidScanning, setIsAddRfidScanning] = useState(false);
+  const [isEditRfidScanning, setIsEditRfidScanning] = useState(false);
+
+  const [adminActionByRequestId, setAdminActionByRequestId] = useState<
+    Record<
+      string,
+      { newValue?: string; generate?: boolean; scanning?: boolean }
+    >
+  >({});
+
+  const getAdminAction = (requestId: string) =>
+    adminActionByRequestId[requestId] ?? {};
+
+  const setAdminAction = (
+    requestId: string,
+    patch: Partial<{
+      newValue?: string;
+      generate?: boolean;
+      scanning?: boolean;
+    }>
+  ) => {
+    setAdminActionByRequestId((prev) => ({
+      ...prev,
+      [requestId]: { ...(prev[requestId] ?? {}), ...patch },
+    }));
+  };
 
   const buildUsernameFromName = (firstName: string, lastName: string) => {
     const base =
@@ -114,6 +161,13 @@ export default function AdminUsers() {
     username: string;
     temporaryPassword: string;
   } | null>(null);
+
+  const [changeRequestsDialogOpen, setChangeRequestsDialogOpen] =
+    useState(false);
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [selectedChangeRequest, setSelectedChangeRequest] =
+    useState<ProfileChangeRequest | null>(null);
+  const [rejectNotes, setRejectNotes] = useState("");
 
   const resendCredentialsMutation = useMutation({
     mutationFn: async (payload: {
@@ -167,12 +221,15 @@ export default function AdminUsers() {
     bloodType: "",
     allergies: "",
     // Doctor-specific fields
+    doctorNic: "",
+    doctorGender: "",
     specialization: "",
     licenseNumber: "",
     qualifications: "",
     experience: "",
     // Pharmacist/Lab tech fields
-    certificationNumber: "",
+    labTechSpecialization: "",
+    labTechLicenseNumber: "",
   });
 
   const [editForm, setEditForm] = useState({
@@ -201,6 +258,80 @@ export default function AdminUsers() {
     labTechSpecialization: "",
     labTechLicenseNumber: "",
   });
+
+  const scanIntoAddRfid = () => {
+    if (isAddRfidScanning) return;
+
+    if (!isWebSerialSupported()) {
+      toast({
+        title: "RFID Scanner Not Supported",
+        description: "Use Chrome or Edge to scan RFID via USB (Web Serial).",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsAddRfidScanning(true);
+    toast({
+      title: "RFID Scanner",
+      description: "Select the NodeMCU serial port, then tap the RFID card.",
+    });
+
+    scanRfidOnce()
+      .then((uid) => {
+        setAddForm((prev) => ({ ...prev, rfid: uid }));
+        toast({
+          title: "RFID Scanned",
+          description: `UID captured: ${uid}`,
+        });
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : "Scan failed";
+        toast({
+          title: "RFID Scan Failed",
+          description: message,
+          variant: "destructive",
+        });
+      })
+      .finally(() => setIsAddRfidScanning(false));
+  };
+
+  const scanIntoEditRfid = () => {
+    if (isEditRfidScanning) return;
+
+    if (!isWebSerialSupported()) {
+      toast({
+        title: "RFID Scanner Not Supported",
+        description: "Use Chrome or Edge to scan RFID via USB (Web Serial).",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsEditRfidScanning(true);
+    toast({
+      title: "RFID Scanner",
+      description: "Select the NodeMCU serial port, then tap the RFID card.",
+    });
+
+    scanRfidOnce()
+      .then((uid) => {
+        setEditForm((prev) => ({ ...prev, rfid: uid }));
+        toast({
+          title: "RFID Scanned",
+          description: `UID captured: ${uid}`,
+        });
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : "Scan failed";
+        toast({
+          title: "RFID Scan Failed",
+          description: message,
+          variant: "destructive",
+        });
+      })
+      .finally(() => setIsEditRfidScanning(false));
+  };
 
   // Fetch active users
   const {
@@ -240,6 +371,160 @@ export default function AdminUsers() {
     },
   });
 
+  const {
+    data: pendingChangeRequestsData,
+    isLoading: isLoadingChangeRequests,
+    refetch: refetchChangeRequests,
+  } = useQuery<{ requests: ProfileChangeRequest[] }>({
+    queryKey: ["admin-profile-change-requests", "pending"],
+    queryFn: async () => {
+      return await api.get("/api/admin/profile/change-requests?status=pending");
+    },
+    enabled: changeRequestsDialogOpen,
+  });
+
+  const pendingCountQuery = useQuery<{ count: number }>({
+    queryKey: ["admin-profile-change-requests", "pending", "count"],
+    queryFn: async () => {
+      return await api.get(
+        "/api/admin/profile/change-requests/count?status=pending"
+      );
+    },
+    refetchInterval: 10000,
+    refetchIntervalInBackground: true,
+  });
+
+  const pendingCount = Number(pendingCountQuery.data?.count ?? 0) || 0;
+  const [lastNotifiedPendingCount, setLastNotifiedPendingCount] = useState<
+    number | null
+  >(null);
+
+  useEffect(() => {
+    if (pendingCountQuery.isLoading) return;
+    if (lastNotifiedPendingCount === null) {
+      setLastNotifiedPendingCount(pendingCount);
+      return;
+    }
+    if (pendingCount > lastNotifiedPendingCount) {
+      toast({
+        title: "New change request",
+        description: `${pendingCount} pending request(s) in queue.`,
+      });
+      setLastNotifiedPendingCount(pendingCount);
+      return;
+    }
+    if (pendingCount < lastNotifiedPendingCount) {
+      setLastNotifiedPendingCount(pendingCount);
+    }
+  }, [
+    pendingCount,
+    pendingCountQuery.isLoading,
+    lastNotifiedPendingCount,
+    toast,
+  ]);
+
+  const pendingChangeRequests = pendingChangeRequestsData?.requests || [];
+
+  const approveChangeRequestMutation = useMutation({
+    mutationFn: async (payload: {
+      id: string;
+      newValue?: string;
+      generate?: boolean;
+    }) => {
+      return await api.post(
+        `/api/admin/profile/change-requests/${payload.id}/approve`,
+        {
+          adminNotes: "",
+          ...(typeof payload.newValue === "string"
+            ? { newValue: payload.newValue }
+            : {}),
+          ...(payload.generate === true ? { generate: true } : {}),
+        }
+      );
+    },
+    onSuccess: async (data: any) => {
+      await refetchChangeRequests();
+      toast({
+        title: "Approved",
+        description:
+          data?.emailSent === true
+            ? "Approved and email sent."
+            : data?.emailSent === false
+            ? `Approved, but email not sent. ${
+                data?.emailError ? `Reason: ${data.emailError}` : ""
+              }`
+            : "Approved.",
+      });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Approve failed",
+        description: err?.message || "Could not approve request",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const scanRfidForRequest = async (requestId: string) => {
+    if (!isWebSerialSupported()) {
+      toast({
+        title: "Web Serial not supported",
+        description: "Use Chrome or Edge to scan RFID",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      setAdminAction(requestId, { scanning: true });
+      const uid = await scanRfidOnce({ timeoutMs: 15000 });
+      setAdminAction(requestId, { newValue: uid, scanning: false });
+      toast({ title: "RFID scanned", description: uid });
+    } catch (err: any) {
+      setAdminAction(requestId, { scanning: false });
+      toast({
+        title: "RFID scan failed",
+        description: err?.message || "Could not read RFID tag",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const rejectChangeRequestMutation = useMutation({
+    mutationFn: async (payload: { id: string; adminNotes: string }) => {
+      return await api.post(
+        `/api/admin/profile/change-requests/${payload.id}/reject`,
+        {
+          adminNotes: payload.adminNotes,
+        }
+      );
+    },
+    onSuccess: async (data: any) => {
+      setRejectDialogOpen(false);
+      setSelectedChangeRequest(null);
+      setRejectNotes("");
+      await refetchChangeRequests();
+      toast({
+        title: "Rejected",
+        description:
+          data?.emailSent === true
+            ? "Rejected and email sent."
+            : data?.emailSent === false
+            ? `Rejected, but email not sent. ${
+                data?.emailError ? `Reason: ${data.emailError}` : ""
+              }`
+            : "Rejected.",
+      });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Reject failed",
+        description: err?.message || "Could not reject request",
+        variant: "destructive",
+      });
+    },
+  });
+
   // Log any errors
   if (error) {
     console.error("Error fetching users:", error);
@@ -275,6 +560,8 @@ export default function AdminUsers() {
         };
       } else if (userData.role === "doctor") {
         payload.doctorData = {
+          nic: userData.doctorNic,
+          gender: userData.doctorGender,
           specialization: userData.specialization,
           licenseNumber: userData.licenseNumber,
           qualifications: userData.qualifications,
@@ -288,7 +575,8 @@ export default function AdminUsers() {
         };
       } else if (userData.role === "lab_technician") {
         payload.labTechData = {
-          certificationNumber: userData.certificationNumber,
+          specialization: userData.labTechSpecialization,
+          licenseNumber: userData.labTechLicenseNumber,
         };
       }
 
@@ -366,11 +654,14 @@ export default function AdminUsers() {
         address: "",
         bloodType: "",
         allergies: "",
+        doctorNic: "",
+        doctorGender: "",
         specialization: "",
         licenseNumber: "",
         qualifications: "",
         experience: "",
-        certificationNumber: "",
+        labTechSpecialization: "",
+        labTechLicenseNumber: "",
       });
     },
     onError: (error: Error) => {
@@ -647,10 +938,10 @@ export default function AdminUsers() {
 
     // Validate patient-specific fields
     if (addForm.role === "patient") {
-      if (!addForm.nic || !addForm.rfid) {
+      if (!addForm.nic || !addForm.rfid || !addForm.gender) {
         toast({
           title: "Validation Error",
-          description: "NIC and RFID are required for patients",
+          description: "NIC, Gender and RFID are required for patients",
           variant: "destructive",
         });
         return;
@@ -659,11 +950,27 @@ export default function AdminUsers() {
 
     // Validate doctor-specific fields
     if (addForm.role === "doctor") {
-      if (!addForm.specialization || !addForm.licenseNumber) {
+      if (
+        !addForm.doctorNic ||
+        !addForm.doctorGender ||
+        !addForm.specialization ||
+        !addForm.licenseNumber
+      ) {
         toast({
           title: "Validation Error",
           description:
-            "Specialization and license number are required for doctors",
+            "NIC, Gender, specialization and license number are required for doctors",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
+    if (addForm.role === "lab_technician") {
+      if (!addForm.labTechLicenseNumber) {
+        toast({
+          title: "Validation Error",
+          description: "License number is required for lab technicians",
           variant: "destructive",
         });
         return;
@@ -754,6 +1061,18 @@ export default function AdminUsers() {
               >
                 <UserX className="h-4 w-4 mr-2" />
                 Deactivated Users ({deactivatedUsers?.length || 0})
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setChangeRequestsDialogOpen(true)}
+              >
+                <Edit className="h-4 w-4 mr-2" />
+                Change Requests
+                {pendingCount > 0 ? (
+                  <span className="ml-2 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-xs font-medium text-destructive-foreground">
+                    {pendingCount}
+                  </span>
+                ) : null}
               </Button>
               <Button onClick={() => setAddDialogOpen(true)}>
                 <UserPlus className="h-4 w-4 mr-2" />
@@ -1102,14 +1421,25 @@ export default function AdminUsers() {
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="add-rfid">RFID *</Label>
-                    <Input
-                      id="add-rfid"
-                      value={addForm.rfid}
-                      onChange={(e) =>
-                        setAddForm({ ...addForm, rfid: e.target.value })
-                      }
-                      placeholder="RF123456"
-                    />
+                    <div className="flex gap-2">
+                      <Input
+                        id="add-rfid"
+                        value={addForm.rfid}
+                        onChange={(e) =>
+                          setAddForm({ ...addForm, rfid: e.target.value })
+                        }
+                        placeholder="Tap Scan or enter manually"
+                      />
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        type="button"
+                        onClick={scanIntoAddRfid}
+                        disabled={isAddRfidScanning}
+                      >
+                        <Scan className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -1166,7 +1496,7 @@ export default function AdminUsers() {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="add-bloodType">Blood Type</Label>
+                    <Label htmlFor="add-bloodType">Blood Group</Label>
                     <Select
                       value={addForm.bloodType}
                       onValueChange={(value) =>
@@ -1174,7 +1504,7 @@ export default function AdminUsers() {
                       }
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Select blood type" />
+                        <SelectValue placeholder="Select blood group" />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="A+">A+</SelectItem>
@@ -1207,6 +1537,37 @@ export default function AdminUsers() {
             {addForm.role === "doctor" && (
               <div className="space-y-4 p-4 border rounded-lg bg-muted/50">
                 <h4 className="font-medium text-sm">Doctor Information</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="add-doctor-nic">NIC *</Label>
+                    <Input
+                      id="add-doctor-nic"
+                      value={addForm.doctorNic}
+                      onChange={(e) =>
+                        setAddForm({ ...addForm, doctorNic: e.target.value })
+                      }
+                      placeholder="123456789V"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="add-doctor-gender">Gender *</Label>
+                    <Select
+                      value={addForm.doctorGender}
+                      onValueChange={(value) =>
+                        setAddForm({ ...addForm, doctorGender: value })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select gender" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="male">Male</SelectItem>
+                        <SelectItem value="female">Female</SelectItem>
+                        <SelectItem value="other">Other</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="add-specialization">Specialization *</Label>
@@ -1287,19 +1648,39 @@ export default function AdminUsers() {
                 <h4 className="font-medium text-sm">
                   Lab Technician Information
                 </h4>
-                <div className="space-y-2">
-                  <Label htmlFor="add-cert">Certification Number *</Label>
-                  <Input
-                    id="add-cert"
-                    value={addForm.certificationNumber}
-                    onChange={(e) =>
-                      setAddForm({
-                        ...addForm,
-                        certificationNumber: e.target.value,
-                      })
-                    }
-                    placeholder="LT12345"
-                  />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="add-labTech-license">
+                      License Number *
+                    </Label>
+                    <Input
+                      id="add-labTech-license"
+                      value={addForm.labTechLicenseNumber}
+                      onChange={(e) =>
+                        setAddForm({
+                          ...addForm,
+                          labTechLicenseNumber: e.target.value,
+                        })
+                      }
+                      placeholder="LT12345"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="add-labTech-specialization">
+                      Specialization
+                    </Label>
+                    <Input
+                      id="add-labTech-specialization"
+                      value={addForm.labTechSpecialization}
+                      onChange={(e) =>
+                        setAddForm({
+                          ...addForm,
+                          labTechSpecialization: e.target.value,
+                        })
+                      }
+                      placeholder="Hematology"
+                    />
+                  </div>
                 </div>
               </div>
             )}
@@ -1443,16 +1824,27 @@ export default function AdminUsers() {
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="edit-rfid">RFID</Label>
-                      <Input
-                        id="edit-rfid"
-                        value={editForm.rfid}
-                        onChange={(e) =>
-                          setEditForm({ ...editForm, rfid: e.target.value })
-                        }
-                        placeholder={
-                          originalUserData?.roleData?.rfid || "Not set"
-                        }
-                      />
+                      <div className="flex gap-2">
+                        <Input
+                          id="edit-rfid"
+                          value={editForm.rfid}
+                          onChange={(e) =>
+                            setEditForm({ ...editForm, rfid: e.target.value })
+                          }
+                          placeholder={
+                            originalUserData?.roleData?.rfid || "Not set"
+                          }
+                        />
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          type="button"
+                          onClick={scanIntoEditRfid}
+                          disabled={isEditRfidScanning}
+                        >
+                          <Scan className="h-4 w-4" />
+                        </Button>
+                      </div>
                       {originalUserData?.roleData?.rfid && (
                         <p className="text-xs text-muted-foreground">
                           Current: {originalUserData.roleData.rfid}
@@ -1548,7 +1940,7 @@ export default function AdminUsers() {
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label htmlFor="edit-bloodType">Blood Type</Label>
+                      <Label htmlFor="edit-bloodType">Blood Group</Label>
                       <Select
                         value={editForm.bloodType}
                         onValueChange={(value) =>
@@ -1556,7 +1948,7 @@ export default function AdminUsers() {
                         }
                       >
                         <SelectTrigger>
-                          <SelectValue placeholder="Select blood type" />
+                          <SelectValue placeholder="Select blood group" />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="A+">A+</SelectItem>
@@ -1858,6 +2250,257 @@ export default function AdminUsers() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Profile Change Requests Dialog */}
+      <Dialog
+        open={changeRequestsDialogOpen}
+        onOpenChange={setChangeRequestsDialogOpen}
+      >
+        <DialogContent className="max-w-6xl w-[95vw]">
+          <DialogHeader>
+            <DialogTitle>Pending Profile Change Requests</DialogTitle>
+            <DialogDescription>
+              Approve to update the database (and email the user). Reject to
+              send a rejection email.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                onClick={() => refetchChangeRequests()}
+                disabled={isLoadingChangeRequests}
+              >
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Refresh
+              </Button>
+            </div>
+
+            {isLoadingChangeRequests ? (
+              <div className="text-muted-foreground">Loading...</div>
+            ) : pendingChangeRequests.length === 0 ? (
+              <div className="text-muted-foreground">No pending requests.</div>
+            ) : (
+              <div className="rounded-md border overflow-x-auto">
+                <Table className="min-w-[980px]">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>User</TableHead>
+                      <TableHead>Role</TableHead>
+                      <TableHead>Field</TableHead>
+                      <TableHead>Old</TableHead>
+                      <TableHead>New</TableHead>
+                      <TableHead>Reason</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pendingChangeRequests.map((r) => {
+                      const fullName = `${String(
+                        r.requesterFirstName || ""
+                      ).trim()} ${String(
+                        r.requesterLastName || ""
+                      ).trim()}`.trim();
+                      const fieldLabel =
+                        r.field === "bloodType"
+                          ? "Blood Group"
+                          : r.field === "dateOfBirth"
+                          ? "Date of birth"
+                          : r.field;
+
+                      return (
+                        <TableRow key={r.id}>
+                          <TableCell>
+                            <div className="font-medium">
+                              {r.requesterUsername || r.requesterUserId}
+                            </div>
+                            {fullName ? (
+                              <div className="text-xs text-muted-foreground">
+                                {fullName}
+                              </div>
+                            ) : null}
+                          </TableCell>
+                          <TableCell className="capitalize">
+                            {r.role === "lab_technician"
+                              ? "lab technician"
+                              : r.role}
+                          </TableCell>
+                          <TableCell>{fieldLabel}</TableCell>
+                          <TableCell className="max-w-[160px] truncate">
+                            {r.oldValue || "—"}
+                          </TableCell>
+                          <TableCell className="max-w-[160px] truncate">
+                            {r.newValue || "—"}
+                          </TableCell>
+                          <TableCell className="max-w-[220px] truncate">
+                            {r.reason || "—"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex flex-col items-end gap-2">
+                              {r.field === "healthId" || r.field === "rfid" ? (
+                                <div className="w-[280px] max-w-full space-y-2">
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      placeholder={
+                                        r.field === "healthId"
+                                          ? "MV-xxxxxxxx (blank = auto-generate)"
+                                          : "RFID UID (scan or type)"
+                                      }
+                                      value={
+                                        getAdminAction(r.id).newValue ?? ""
+                                      }
+                                      onChange={(e) =>
+                                        setAdminAction(r.id, {
+                                          newValue: e.target.value,
+                                        })
+                                      }
+                                    />
+
+                                    {r.field === "healthId" ? (
+                                      <Button
+                                        type="button"
+                                        variant={
+                                          getAdminAction(r.id).generate
+                                            ? "default"
+                                            : "outline"
+                                        }
+                                        onClick={() =>
+                                          setAdminAction(r.id, {
+                                            generate: !getAdminAction(r.id)
+                                              .generate,
+                                          })
+                                        }
+                                      >
+                                        {getAdminAction(r.id).generate
+                                          ? "Generate: ON"
+                                          : "Generate"}
+                                      </Button>
+                                    ) : (
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={() => scanRfidForRequest(r.id)}
+                                        disabled={
+                                          getAdminAction(r.id).scanning === true
+                                        }
+                                      >
+                                        <Scan className="h-4 w-4 mr-2" />
+                                        {getAdminAction(r.id).scanning
+                                          ? "Scanning..."
+                                          : "Scan"}
+                                      </Button>
+                                    )}
+                                  </div>
+                                  <div className="text-xs text-muted-foreground">
+                                    {r.field === "healthId"
+                                      ? "Leave blank to generate a new Health ID (MV-...)"
+                                      : "Scan RFID tag, or enter UID manually"}
+                                  </div>
+                                </div>
+                              ) : null}
+
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  size="sm"
+                                  onClick={() =>
+                                    approveChangeRequestMutation.mutate({
+                                      id: r.id,
+                                      newValue: getAdminAction(r.id).newValue,
+                                      generate: getAdminAction(r.id).generate,
+                                    })
+                                  }
+                                  disabled={
+                                    approveChangeRequestMutation.isPending
+                                  }
+                                >
+                                  Approve
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => {
+                                    setSelectedChangeRequest(r);
+                                    setRejectDialogOpen(true);
+                                    setRejectNotes("");
+                                  }}
+                                  disabled={
+                                    rejectChangeRequestMutation.isPending
+                                  }
+                                >
+                                  Reject
+                                </Button>
+                              </div>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setChangeRequestsDialogOpen(false)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject dialog */}
+      <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reject Request</DialogTitle>
+            <DialogDescription>
+              Provide a rejection reason to email the user.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <Label>Rejection reason</Label>
+            <Textarea
+              value={rejectNotes}
+              onChange={(e) => setRejectNotes(e.target.value)}
+              className="min-h-[100px]"
+              placeholder="Enter rejection reason"
+            />
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setRejectDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (!selectedChangeRequest) return;
+                rejectChangeRequestMutation.mutate({
+                  id: selectedChangeRequest.id,
+                  adminNotes: rejectNotes,
+                });
+              }}
+              disabled={
+                rejectChangeRequestMutation.isPending ||
+                rejectNotes.trim().length === 0
+              }
+            >
+              {rejectChangeRequestMutation.isPending
+                ? "Rejecting..."
+                : "Reject"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { isWebSerialSupported, scanRfidOnce } from "@/lib/rfid-serial";
 import {
   Card,
   CardContent,
@@ -58,15 +59,16 @@ export default function DoctorPatients() {
   const [patientId, setPatientId] = useState("");
   const [nic, setNic] = useState("");
   const [rfid, setRfid] = useState("");
+  const [isRfidScanning, setIsRfidScanning] = useState(false);
   const [verifiedPatient, setVerifiedPatient] = useState<Patient | null>(null);
   const [searchAttempted, setSearchAttempted] = useState(false);
 
   // Verify patient mutation
   const verifyPatientMutation = useMutation({
     mutationFn: async (data: {
-      patientId: string;
-      nic: string;
-      rfid: string;
+      patientId?: string;
+      nic?: string;
+      rfid?: string;
     }) => {
       const response = await fetch("/api/patients/verify", {
         method: "POST",
@@ -130,11 +132,40 @@ export default function DoctorPatients() {
   };
 
   const handleScanRFID = () => {
+    if (isRfidScanning || verifyPatientMutation.isPending) return;
+
+    if (!isWebSerialSupported()) {
+      toast({
+        title: "RFID Scanner Not Supported",
+        description: "Use Chrome or Edge to scan RFID via USB (Web Serial).",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsRfidScanning(true);
     toast({
       title: "RFID Scanner",
-      description: "Connect RFID scanner and scan patient's card",
+      description: "Select the NodeMCU serial port, then tap the RFID card.",
     });
-    // TODO: Implement RFID scanner integration
+
+    scanRfidOnce()
+      .then((uid) => {
+        setRfid(uid);
+        toast({
+          title: "RFID Scanned",
+          description: `UID captured: ${uid}`,
+        });
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : "Scan failed";
+        toast({
+          title: "RFID Scan Failed",
+          description: message,
+          variant: "destructive",
+        });
+      })
+      .finally(() => setIsRfidScanning(false));
   };
 
   return (
@@ -213,7 +244,7 @@ export default function DoctorPatients() {
                   variant="outline"
                   size="icon"
                   onClick={handleScanRFID}
-                  disabled={verifyPatientMutation.isPending}
+                  disabled={verifyPatientMutation.isPending || isRfidScanning}
                 >
                   <Scan className="h-4 w-4" />
                 </Button>
@@ -367,7 +398,7 @@ export default function DoctorPatients() {
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                       <Droplet className="h-4 w-4" />
-                      Blood Type
+                      Blood Group
                     </label>
                     {verifiedPatient.bloodType ? (
                       <Badge variant="secondary" className="text-lg">

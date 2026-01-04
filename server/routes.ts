@@ -6,7 +6,12 @@ import { storage } from "./storage";
 import { format } from "date-fns";
 import { randomBytes } from "crypto";
 import bcrypt from "bcryptjs";
-import { sendPatientApprovalEmail, sendUserCreatedEmail } from "./email";
+import {
+  sendPatientApprovalEmail,
+  sendUserCreatedEmail,
+  sendSensitiveChangeApprovedEmail,
+  sendSensitiveChangeRejectedEmail,
+} from "./email";
 // Use local authentication
 import {
   setupAuth,
@@ -54,6 +59,7 @@ import {
   doctors,
   pharmacists,
   users,
+  profileChangeRequests,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, sql, and, or, gte, count, ne, isNull, desc } from "drizzle-orm";
@@ -66,6 +72,1441 @@ export async function registerRoutes(app: Express): Promise<Server> {
   setupAuth(app);
 
   // Note: Login, register, logout, and auth/user endpoints are handled in localAuth.ts
+
+  // ============================================================================
+  // PROFILE (ALL AUTHENTICATED USERS)
+  // ============================================================================
+  app.get("/api/profile", isAuthenticated, async (req: any, res: Response) => {
+    const userId = (req as any)?.user?.id as string | undefined;
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const rows = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    const u = rows[0];
+    if (!u) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    const { password: _pw, ...userWithoutPassword } = u as any;
+    return res.json({ user: userWithoutPassword });
+  });
+
+  app.get(
+    "/api/profile/username-available",
+    isAuthenticated,
+    async (req: any, res: Response) => {
+      const raw =
+        typeof req.query?.username === "string" ? req.query.username : "";
+      const candidate = raw.trim();
+      if (!candidate) {
+        return res.status(400).json({ message: "username is required" });
+      }
+
+      // If unchanged, it's always available.
+      const currentUsername = String((req as any)?.user?.username || "");
+      if (
+        currentUsername &&
+        currentUsername.toLowerCase() === candidate.toLowerCase()
+      ) {
+        return res.json({ available: true });
+      }
+
+      const existing = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.username, candidate))
+        .limit(1);
+
+      return res.json({ available: existing.length === 0 });
+    }
+  );
+
+  app.patch(
+    "/api/profile",
+    isAuthenticated,
+    async (req: any, res: Response) => {
+      try {
+        const userId = req.user?.id;
+        if (!userId) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        const nextUsernameRaw =
+          typeof req.body?.username === "string"
+            ? req.body.username
+            : undefined;
+        const nextEmailRaw =
+          typeof req.body?.email === "string" ? req.body.email : undefined;
+        const nextFirstNameRaw =
+          typeof req.body?.firstName === "string"
+            ? req.body.firstName
+            : undefined;
+        const nextLastNameRaw =
+          typeof req.body?.lastName === "string"
+            ? req.body.lastName
+            : undefined;
+
+        const updateData: any = { updatedAt: new Date() };
+
+        if (nextFirstNameRaw !== undefined) {
+          const v = nextFirstNameRaw.trim();
+          updateData.firstName = v.length ? v : null;
+        }
+        if (nextLastNameRaw !== undefined) {
+          const v = nextLastNameRaw.trim();
+          updateData.lastName = v.length ? v : null;
+        }
+        if (nextEmailRaw !== undefined) {
+          const v = nextEmailRaw.trim();
+          updateData.email = v.length ? v : null;
+        }
+
+        if (nextUsernameRaw !== undefined) {
+          const v = nextUsernameRaw.trim();
+          if (v.length < 3 || v.length > 24) {
+            return res
+              .status(400)
+              .json({ message: "Username must be 3-24 characters" });
+          }
+          if (!/^[a-zA-Z0-9.]+$/.test(v)) {
+            return res.status(400).json({
+              message: "Username can contain only letters, numbers, and dots",
+            });
+          }
+
+          // Only check uniqueness if changing.
+          const currentUsername = String(req.user?.username || "");
+          if (currentUsername.toLowerCase() !== v.toLowerCase()) {
+            const existing = await db
+              .select({ id: users.id })
+              .from(users)
+              .where(eq(users.username, v))
+              .limit(1);
+            if (existing.length > 0) {
+              return res
+                .status(409)
+                .json({ message: "Username is not available" });
+            }
+          }
+
+          updateData.username = v;
+        }
+
+        const updated = await db
+          .update(users)
+          .set(updateData)
+          .where(eq(users.id, userId))
+          .returning();
+
+        const updatedUser = updated[0];
+        if (!updatedUser) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        const { password: _pw, ...userWithoutPassword } = updatedUser as any;
+        return res.json({ user: userWithoutPassword });
+      } catch (error: any) {
+        console.error("Profile update error:", error);
+        return res
+          .status(500)
+          .json({ message: error?.message || "Failed to update profile" });
+      }
+    }
+  );
+
+  // Full profile (base user + role-specific record)
+  app.get(
+    "/api/profile/full",
+    isAuthenticated,
+    async (req: any, res: Response) => {
+      try {
+        const userId = (req as any)?.user?.id as string | undefined;
+        if (!userId) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        const userRows = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+        const u = userRows[0];
+        if (!u) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        const role = String((u as any).role || "");
+        let roleData: any | null = null;
+
+        if (role === "patient") {
+          const rows = await db
+            .select()
+            .from(patients)
+            .where(eq(patients.userId, userId))
+            .limit(1);
+          roleData = rows[0] || null;
+
+          // Fallback: some older data paths may not have userId linked correctly.
+          if (!roleData) {
+            const regRows = await db
+              .select({ nic: patientRegistrationRequests.nic })
+              .from(patientRegistrationRequests)
+              .where(eq(patientRegistrationRequests.approvedUserId, userId))
+              .limit(1);
+            const reg = regRows[0];
+            if (reg?.nic) {
+              const byNic = await db
+                .select()
+                .from(patients)
+                .where(eq(patients.nic, reg.nic))
+                .limit(1);
+              roleData = byNic[0] || null;
+            }
+          }
+        } else if (role === "doctor") {
+          const rows = await db
+            .select()
+            .from(doctors)
+            .where(eq(doctors.userId, userId))
+            .limit(1);
+          roleData = rows[0] || null;
+        } else if (role === "pharmacist") {
+          const rows = await db
+            .select()
+            .from(pharmacists)
+            .where(eq(pharmacists.userId, userId))
+            .limit(1);
+          roleData = rows[0] || null;
+        } else if (role === "lab_technician") {
+          const rows = await db
+            .select()
+            .from(labTechnicians)
+            .where(eq(labTechnicians.userId, userId))
+            .limit(1);
+          roleData = rows[0] || null;
+        }
+
+        const { password: _pw, ...userWithoutPassword } = u as any;
+        return res.json({ user: userWithoutPassword, roleData });
+      } catch (error: any) {
+        console.error("Full profile fetch error:", error);
+        return res.status(500).json({
+          message: error?.message || "Failed to fetch full profile",
+        });
+      }
+    }
+  );
+
+  app.patch(
+    "/api/profile/full",
+    isAuthenticated,
+    async (req: any, res: Response) => {
+      try {
+        const userId = (req as any)?.user?.id as string | undefined;
+        if (!userId) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        const userRows = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+        const existingUser = userRows[0];
+        if (!existingUser) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        const nextEmailRaw =
+          typeof req.body?.email === "string" ? req.body.email : undefined;
+        const nextFirstNameRaw =
+          typeof req.body?.firstName === "string"
+            ? req.body.firstName
+            : undefined;
+        const nextLastNameRaw =
+          typeof req.body?.lastName === "string"
+            ? req.body.lastName
+            : undefined;
+
+        const updateUserData: any = { updatedAt: new Date() };
+
+        if (nextFirstNameRaw !== undefined) {
+          const v = nextFirstNameRaw.trim();
+          updateUserData.firstName = v.length ? v : null;
+        }
+        if (nextLastNameRaw !== undefined) {
+          const v = nextLastNameRaw.trim();
+          updateUserData.lastName = v.length ? v : null;
+        }
+        if (nextEmailRaw !== undefined) {
+          const v = nextEmailRaw.trim();
+          updateUserData.email = v.length ? v : null;
+        }
+
+        const updatedUsers = await db
+          .update(users)
+          .set(updateUserData)
+          .where(eq(users.id, userId))
+          .returning();
+        const updatedUser = updatedUsers[0];
+        if (!updatedUser) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        const role = String((existingUser as any).role || "");
+        const roleBody = req.body?.roleData;
+        let roleData: any | null = null;
+
+        if (role === "patient") {
+          const updatePatientData: any = { updatedAt: new Date() };
+          if (roleBody && typeof roleBody === "object") {
+            if (roleBody.contactInfo !== undefined) {
+              const v = String(roleBody.contactInfo || "").trim();
+              updatePatientData.contactInfo = v.length ? v : null;
+            }
+            if (roleBody.address !== undefined) {
+              const v = String(roleBody.address || "").trim();
+              updatePatientData.address = v.length ? v : null;
+            }
+          }
+
+          // Primary: update patient linked to this user
+          const byUser = await db
+            .select({ id: patients.id })
+            .from(patients)
+            .where(eq(patients.userId, userId))
+            .limit(1);
+
+          let patientId: string | null = byUser[0]?.id || null;
+
+          // Fallback: if older data path missed userId link, try the approved registration NIC.
+          if (!patientId) {
+            const regRows = await db
+              .select({ nic: patientRegistrationRequests.nic })
+              .from(patientRegistrationRequests)
+              .where(eq(patientRegistrationRequests.approvedUserId, userId))
+              .limit(1);
+            const reg = regRows[0];
+            if (reg?.nic) {
+              const byNic = await db
+                .select({ id: patients.id })
+                .from(patients)
+                .where(eq(patients.nic, reg.nic))
+                .limit(1);
+              patientId = byNic[0]?.id || null;
+            }
+          }
+
+          if (!patientId) {
+            return res
+              .status(404)
+              .json({ message: "Patient profile not found" });
+          }
+
+          const updated = await db
+            .update(patients)
+            .set(updatePatientData)
+            .where(eq(patients.id, patientId))
+            .returning();
+          roleData = updated[0] || null;
+        } else if (role === "doctor") {
+          const updateDoctorData: any = { updatedAt: new Date() };
+          if (roleBody && typeof roleBody === "object") {
+            if (roleBody.qualifications !== undefined) {
+              const v = String(roleBody.qualifications || "").trim();
+              updateDoctorData.qualifications = v.length ? v : null;
+            }
+            if (roleBody.experience !== undefined) {
+              const raw = roleBody.experience;
+              if (raw === null || raw === "") {
+                updateDoctorData.experience = null;
+              } else {
+                const n = Number(raw);
+                if (Number.isNaN(n) || !Number.isFinite(n) || n < 0) {
+                  return res.status(400).json({
+                    message: "Experience must be a non-negative number",
+                  });
+                }
+                updateDoctorData.experience = Math.floor(n);
+              }
+            }
+          }
+
+          const updated = await db
+            .update(doctors)
+            .set(updateDoctorData)
+            .where(eq(doctors.userId, userId))
+            .returning();
+          roleData = updated[0] || null;
+          if (!roleData) {
+            return res
+              .status(404)
+              .json({ message: "Doctor profile not found" });
+          }
+        } else if (role === "lab_technician") {
+          const updateLabTechData: any = { updatedAt: new Date() };
+          if (roleBody && typeof roleBody === "object") {
+            if (roleBody.specialization !== undefined) {
+              const v = String(roleBody.specialization || "").trim();
+              updateLabTechData.specialization = v.length ? v : null;
+            }
+          }
+
+          const updated = await db
+            .update(labTechnicians)
+            .set(updateLabTechData)
+            .where(eq(labTechnicians.userId, userId))
+            .returning();
+          roleData = updated[0] || null;
+          if (!roleData) {
+            return res
+              .status(404)
+              .json({ message: "Lab technician profile not found" });
+          }
+        } else if (role === "pharmacist") {
+          const rows = await db
+            .select()
+            .from(pharmacists)
+            .where(eq(pharmacists.userId, userId))
+            .limit(1);
+          roleData = rows[0] || null;
+        } else {
+          roleData = null;
+        }
+
+        const { password: _pw, ...userWithoutPassword } = updatedUser as any;
+        return res.json({ user: userWithoutPassword, roleData });
+      } catch (error: any) {
+        console.error("Full profile update error:", error);
+        return res
+          .status(500)
+          .json({ message: error?.message || "Failed to update profile" });
+      }
+    }
+  );
+
+  // Sensitive profile field change requests (create by user, review by admin)
+  app.post(
+    "/api/profile/change-requests",
+    isAuthenticated,
+    async (req: any, res: Response) => {
+      try {
+        const userId = (req as any)?.user?.id as string | undefined;
+        if (!userId) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        const fieldRaw =
+          typeof req.body?.field === "string" ? req.body.field : "";
+        const newValueRaw =
+          typeof req.body?.newValue === "string" ? req.body.newValue : "";
+        const reasonRaw =
+          typeof req.body?.reason === "string" ? req.body.reason : undefined;
+
+        const field = fieldRaw.trim();
+        const newValue = newValueRaw.trim();
+        const reason = reasonRaw?.trim();
+
+        const fieldAllowsEmptyNewValue =
+          field === "healthId" || field === "rfid";
+
+        if (!field) {
+          return res.status(400).json({ message: "field is required" });
+        }
+        if (!fieldAllowsEmptyNewValue && !newValue) {
+          return res.status(400).json({ message: "newValue is required" });
+        }
+
+        const userRows = await db
+          .select({ role: users.role })
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+        const role = String(userRows[0]?.role || "");
+        if (!role) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        const allowed: Record<string, string[]> = {
+          patient: [
+            "nic",
+            "rfid",
+            "healthId",
+            "gender",
+            "dateOfBirth",
+            "bloodType",
+          ],
+          doctor: ["nic", "gender", "licenseNumber"],
+          pharmacist: ["licenseNumber"],
+          lab_technician: ["licenseNumber"],
+          admin: [],
+        };
+
+        const baseAllowed = ["username"]; // available to every role
+        const allowedForRole = [...baseAllowed, ...(allowed[role] || [])];
+        if (!allowedForRole.includes(field)) {
+          return res.status(400).json({
+            message: `Field '${field}' is not requestable for role '${role}'`,
+          });
+        }
+
+        // Allow multiple requests (including multiple pending) per field.
+
+        // Load current value (for audit email + admin review).
+        let oldValue: string | null = null;
+
+        if (field === "username") {
+          const urows = await db
+            .select({ username: users.username })
+            .from(users)
+            .where(eq(users.id, userId))
+            .limit(1);
+          const currentUsername = String(urows[0]?.username || "");
+          oldValue = currentUsername || null;
+
+          if (!newValue) {
+            return res.status(400).json({ message: "newValue is required" });
+          }
+        } else if (role === "patient") {
+          let patientRow: any | null = null;
+          const byUser = await db
+            .select()
+            .from(patients)
+            .where(eq(patients.userId, userId))
+            .limit(1);
+          patientRow = byUser[0] || null;
+
+          if (!patientRow) {
+            const regRows = await db
+              .select({ nic: patientRegistrationRequests.nic })
+              .from(patientRegistrationRequests)
+              .where(eq(patientRegistrationRequests.approvedUserId, userId))
+              .limit(1);
+            const reg = regRows[0];
+            if (reg?.nic) {
+              const byNic = await db
+                .select()
+                .from(patients)
+                .where(eq(patients.nic, reg.nic))
+                .limit(1);
+              patientRow = byNic[0] || null;
+            }
+          }
+
+          if (!patientRow) {
+            return res
+              .status(404)
+              .json({ message: "Patient profile not found" });
+          }
+          const v = (patientRow as any)[field];
+          oldValue = v instanceof Date ? v.toISOString() : v ?? null;
+        } else if (role === "doctor") {
+          const rows = await db
+            .select()
+            .from(doctors)
+            .where(eq(doctors.userId, userId))
+            .limit(1);
+          const doctorRow = rows[0];
+          if (!doctorRow) {
+            return res
+              .status(404)
+              .json({ message: "Doctor profile not found" });
+          }
+          oldValue = (doctorRow as any)[field] ?? null;
+        } else if (role === "pharmacist") {
+          const rows = await db
+            .select()
+            .from(pharmacists)
+            .where(eq(pharmacists.userId, userId))
+            .limit(1);
+          const pharmacistRow = rows[0];
+          if (!pharmacistRow) {
+            return res
+              .status(404)
+              .json({ message: "Pharmacist profile not found" });
+          }
+          oldValue = (pharmacistRow as any)[field] ?? null;
+        } else if (role === "lab_technician") {
+          const rows = await db
+            .select()
+            .from(labTechnicians)
+            .where(eq(labTechnicians.userId, userId))
+            .limit(1);
+          const labTechRow = rows[0];
+          if (!labTechRow) {
+            return res
+              .status(404)
+              .json({ message: "Lab technician profile not found" });
+          }
+          oldValue = (labTechRow as any)[field] ?? null;
+        } else {
+          return res.status(400).json({ message: "Unsupported role" });
+        }
+
+        if (!fieldAllowsEmptyNewValue) {
+          if (
+            oldValue !== null &&
+            typeof oldValue === "string" &&
+            oldValue.trim() === newValue
+          ) {
+            return res
+              .status(400)
+              .json({ message: "New value is the same as current value" });
+          }
+        } else {
+          // For healthId / rfid requests, allow empty newValue so admin can fill/generate later.
+          // If user did provide a value, still prevent submitting the same value.
+          if (
+            newValue.trim().length > 0 &&
+            oldValue !== null &&
+            typeof oldValue === "string" &&
+            oldValue.trim() === newValue
+          ) {
+            return res
+              .status(400)
+              .json({ message: "New value is the same as current value" });
+          }
+        }
+
+        const inserted = await db
+          .insert(profileChangeRequests)
+          .values({
+            requesterUserId: userId,
+            role,
+            field,
+            oldValue,
+            newValue,
+            reason: reason && reason.length ? reason : null,
+            status: "pending",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          } as any)
+          .returning();
+
+        return res.json({ request: inserted[0] });
+      } catch (error: any) {
+        console.error("Create profile change request error:", error);
+        return res
+          .status(500)
+          .json({ message: error?.message || "Failed to create request" });
+      }
+    }
+  );
+
+  // User: list own change requests (history)
+  app.get(
+    "/api/profile/change-requests",
+    isAuthenticated,
+    async (req: any, res: Response) => {
+      try {
+        const userId = (req as any)?.user?.id as string | undefined;
+        if (!userId) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        const statusRaw =
+          typeof req.query?.status === "string" ? req.query.status : "";
+        const status = statusRaw.trim();
+
+        const rows = await db
+          .select({
+            id: profileChangeRequests.id,
+            role: profileChangeRequests.role,
+            field: profileChangeRequests.field,
+            oldValue: profileChangeRequests.oldValue,
+            newValue: profileChangeRequests.newValue,
+            reason: profileChangeRequests.reason,
+            status: profileChangeRequests.status,
+            reviewedAt: profileChangeRequests.reviewedAt,
+            adminNotes: profileChangeRequests.adminNotes,
+            createdAt: profileChangeRequests.createdAt,
+          })
+          .from(profileChangeRequests)
+          .where(
+            status
+              ? and(
+                  eq(profileChangeRequests.requesterUserId, userId),
+                  eq(profileChangeRequests.status, status)
+                )
+              : eq(profileChangeRequests.requesterUserId, userId)
+          )
+          .orderBy(desc(profileChangeRequests.createdAt));
+
+        return res.json({ requests: rows });
+      } catch (error: any) {
+        console.error("User list profile change requests error:", error);
+        return res
+          .status(500)
+          .json({ message: error?.message || "Failed to load requests" });
+      }
+    }
+  );
+
+  app.get(
+    "/api/admin/profile/change-requests",
+    isAuthenticated,
+    isAdmin,
+    async (req: any, res: Response) => {
+      try {
+        const statusRaw =
+          typeof req.query?.status === "string" ? req.query.status : "pending";
+        const status = statusRaw.trim() || "pending";
+
+        const rows = await db
+          .select({
+            id: profileChangeRequests.id,
+            requesterUserId: profileChangeRequests.requesterUserId,
+            role: profileChangeRequests.role,
+            field: profileChangeRequests.field,
+            oldValue: profileChangeRequests.oldValue,
+            newValue: profileChangeRequests.newValue,
+            reason: profileChangeRequests.reason,
+            status: profileChangeRequests.status,
+            reviewedBy: profileChangeRequests.reviewedBy,
+            reviewedAt: profileChangeRequests.reviewedAt,
+            adminNotes: profileChangeRequests.adminNotes,
+            createdAt: profileChangeRequests.createdAt,
+            requesterUsername: users.username,
+            requesterEmail: users.email,
+            requesterFirstName: users.firstName,
+            requesterLastName: users.lastName,
+          })
+          .from(profileChangeRequests)
+          .innerJoin(users, eq(users.id, profileChangeRequests.requesterUserId))
+          .where(eq(profileChangeRequests.status, status))
+          .orderBy(desc(profileChangeRequests.createdAt));
+
+        return res.json({ requests: rows });
+      } catch (error: any) {
+        console.error("Admin list profile change requests error:", error);
+        return res
+          .status(500)
+          .json({ message: error?.message || "Failed to load requests" });
+      }
+    }
+  );
+
+  app.get(
+    "/api/admin/profile/change-requests/count",
+    isAuthenticated,
+    isAdmin,
+    async (req: any, res: Response) => {
+      try {
+        const statusRaw =
+          typeof req.query?.status === "string" ? req.query.status : "pending";
+        const status = statusRaw.trim() || "pending";
+
+        const rows = await db
+          .select({ count: count() })
+          .from(profileChangeRequests)
+          .where(eq(profileChangeRequests.status, status));
+
+        const c = Number((rows as any)?.[0]?.count ?? 0);
+        return res.json({ count: Number.isFinite(c) ? c : 0 });
+      } catch (error: any) {
+        console.error("Admin count profile change requests error:", error);
+        return res
+          .status(500)
+          .json({ message: error?.message || "Failed to load count" });
+      }
+    }
+  );
+
+  app.post(
+    "/api/admin/profile/change-requests/:id/approve",
+    isAuthenticated,
+    isAdmin,
+    async (req: any, res: Response) => {
+      try {
+        const adminUserId = (req as any)?.user?.id as string | undefined;
+        if (!adminUserId) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        const id = String(req.params?.id || "").trim();
+        if (!id) {
+          return res.status(400).json({ message: "id is required" });
+        }
+
+        const rows = await db
+          .select()
+          .from(profileChangeRequests)
+          .where(eq(profileChangeRequests.id, id))
+          .limit(1);
+        const reqRow: any = rows[0];
+        if (!reqRow) {
+          return res.status(404).json({ message: "Request not found" });
+        }
+        if (String(reqRow.status || "") !== "pending") {
+          return res
+            .status(409)
+            .json({ message: "Only pending requests can be approved" });
+        }
+
+        const role = String(reqRow.role || "");
+        const field = String(reqRow.field || "");
+        const requestedValue = String(reqRow.newValue || "").trim();
+
+        const overrideValueRaw =
+          typeof req.body?.newValue === "string"
+            ? req.body.newValue
+            : undefined;
+        const overrideValue =
+          overrideValueRaw !== undefined ? overrideValueRaw.trim() : undefined;
+        const generate = req.body?.generate === true;
+
+        const generateUniqueHealthId = async () => {
+          for (let i = 0; i < 8; i++) {
+            const candidate = `MV-${randomBytes(4).toString("hex")}`;
+            const exists = await db
+              .select({ id: patients.id })
+              .from(patients)
+              .where(eq(patients.healthId, candidate))
+              .limit(1);
+            if (exists.length === 0) return candidate;
+          }
+          return `MV-${Date.now()}`;
+        };
+
+        let appliedValue =
+          overrideValue !== undefined ? overrideValue : requestedValue;
+
+        if (field === "healthId" && (generate || !appliedValue)) {
+          appliedValue = await generateUniqueHealthId();
+        }
+
+        if (field === "rfid" && !appliedValue) {
+          return res.status(400).json({
+            message: "RFID value must be provided (scan or enter manually)",
+          });
+        }
+
+        // Base user fields
+        if (field === "username") {
+          if (!appliedValue) {
+            return res.status(400).json({ message: "Username is required" });
+          }
+          if (appliedValue.length < 3 || appliedValue.length > 24) {
+            return res
+              .status(400)
+              .json({ message: "Username must be 3-24 characters" });
+          }
+          if (!/^[a-zA-Z0-9.]+$/.test(appliedValue)) {
+            return res.status(400).json({
+              message: "Username can contain only letters, numbers, and dots",
+            });
+          }
+
+          const existing = await db
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.username, appliedValue))
+            .limit(1);
+          if (
+            existing.length > 0 &&
+            String(existing[0]?.id) !== String(reqRow.requesterUserId)
+          ) {
+            return res
+              .status(409)
+              .json({ message: "Username is not available" });
+          }
+
+          await db
+            .update(users)
+            .set({ username: appliedValue, updatedAt: new Date() } as any)
+            .where(eq(users.id, reqRow.requesterUserId));
+        } else if (role === "patient") {
+          // Resolve patientId (userId linkage fallback)
+          const byUser = await db
+            .select({ id: patients.id })
+            .from(patients)
+            .where(eq(patients.userId, reqRow.requesterUserId))
+            .limit(1);
+          let patientId: string | null = byUser[0]?.id || null;
+
+          if (!patientId) {
+            const regRows = await db
+              .select({ nic: patientRegistrationRequests.nic })
+              .from(patientRegistrationRequests)
+              .where(
+                eq(
+                  patientRegistrationRequests.approvedUserId,
+                  reqRow.requesterUserId
+                )
+              )
+              .limit(1);
+            const reg = regRows[0];
+            if (reg?.nic) {
+              const byNic = await db
+                .select({ id: patients.id })
+                .from(patients)
+                .where(eq(patients.nic, reg.nic))
+                .limit(1);
+              patientId = byNic[0]?.id || null;
+            }
+          }
+
+          if (!patientId) {
+            return res
+              .status(404)
+              .json({ message: "Patient profile not found" });
+          }
+
+          if (field === "rfid") {
+            const existingRfid = await db
+              .select({ id: patients.id })
+              .from(patients)
+              .where(eq(patients.rfid, appliedValue))
+              .limit(1);
+            if (
+              existingRfid.length > 0 &&
+              String(existingRfid[0]?.id) !== String(patientId)
+            ) {
+              return res
+                .status(409)
+                .json({ message: "RFID is already in use" });
+            }
+          }
+          if (field === "healthId") {
+            const existingHealthId = await db
+              .select({ id: patients.id })
+              .from(patients)
+              .where(eq(patients.healthId, appliedValue))
+              .limit(1);
+            if (
+              existingHealthId.length > 0 &&
+              String(existingHealthId[0]?.id) !== String(patientId)
+            ) {
+              return res
+                .status(409)
+                .json({ message: "Health ID is already in use" });
+            }
+          }
+          if (field === "nic") {
+            const existingNic = await db
+              .select({ id: patients.id })
+              .from(patients)
+              .where(eq(patients.nic, appliedValue))
+              .limit(1);
+            if (
+              existingNic.length > 0 &&
+              String(existingNic[0]?.id) !== String(patientId)
+            ) {
+              return res.status(409).json({ message: "NIC is already in use" });
+            }
+          }
+          if (field === "gender") {
+            const gv = appliedValue.toLowerCase();
+            if (gv !== "male" && gv !== "female" && gv !== "other") {
+              return res
+                .status(400)
+                .json({ message: "Gender must be male, female, or other" });
+            }
+            appliedValue = gv;
+          }
+
+          const updatedAt = new Date();
+          if (field === "dateOfBirth") {
+            const d = new Date(appliedValue);
+            if (Number.isNaN(d.getTime())) {
+              return res.status(400).json({
+                message: "Invalid dateOfBirth value; expected ISO date string",
+              });
+            }
+            await db
+              .update(patients)
+              .set({ dateOfBirth: d, updatedAt })
+              .where(eq(patients.id, patientId));
+          } else if (field === "rfid") {
+            await db
+              .update(patients)
+              .set({ rfid: appliedValue, updatedAt })
+              .where(eq(patients.id, patientId));
+          } else if (field === "healthId") {
+            await db
+              .update(patients)
+              .set({ healthId: appliedValue, updatedAt })
+              .where(eq(patients.id, patientId));
+          } else if (field === "nic") {
+            await db
+              .update(patients)
+              .set({ nic: appliedValue, updatedAt })
+              .where(eq(patients.id, patientId));
+          } else if (field === "gender") {
+            await db
+              .update(patients)
+              .set({ gender: appliedValue, updatedAt })
+              .where(eq(patients.id, patientId));
+          } else if (field === "bloodType") {
+            await db
+              .update(patients)
+              .set({ bloodType: appliedValue, updatedAt })
+              .where(eq(patients.id, patientId));
+          } else {
+            return res
+              .status(400)
+              .json({ message: `Unsupported patient field '${field}'` });
+          }
+        } else if (role === "doctor") {
+          if (!appliedValue) {
+            return res.status(400).json({ message: "Value is required" });
+          }
+          if (field === "gender") {
+            const gv = appliedValue.toLowerCase();
+            if (gv !== "male" && gv !== "female" && gv !== "other") {
+              return res
+                .status(400)
+                .json({ message: "Gender must be male, female, or other" });
+            }
+            appliedValue = gv;
+          }
+          if (field === "licenseNumber") {
+            const existing = await db
+              .select({ id: doctors.id })
+              .from(doctors)
+              .where(eq(doctors.licenseNumber, appliedValue))
+              .limit(1);
+            if (existing.length > 0) {
+              return res
+                .status(409)
+                .json({ message: "License number is already in use" });
+            }
+          }
+          if (field === "nic") {
+            const existing = await db
+              .select({ id: doctors.id })
+              .from(doctors)
+              .where(eq(doctors.nic, appliedValue))
+              .limit(1);
+            if (existing.length > 0) {
+              return res.status(409).json({ message: "NIC is already in use" });
+            }
+          }
+
+          const updatedAt = new Date();
+          let updated: any[] = [];
+          if (field === "nic") {
+            updated = await db
+              .update(doctors)
+              .set({ nic: appliedValue, updatedAt })
+              .where(eq(doctors.userId, reqRow.requesterUserId))
+              .returning();
+          } else if (field === "gender") {
+            updated = await db
+              .update(doctors)
+              .set({ gender: appliedValue, updatedAt })
+              .where(eq(doctors.userId, reqRow.requesterUserId))
+              .returning();
+          } else if (field === "licenseNumber") {
+            updated = await db
+              .update(doctors)
+              .set({ licenseNumber: appliedValue, updatedAt })
+              .where(eq(doctors.userId, reqRow.requesterUserId))
+              .returning();
+          } else {
+            return res
+              .status(400)
+              .json({ message: `Unsupported doctor field '${field}'` });
+          }
+          if (!updated[0]) {
+            return res
+              .status(404)
+              .json({ message: "Doctor profile not found" });
+          }
+        } else if (role === "pharmacist") {
+          if (!appliedValue) {
+            return res.status(400).json({ message: "Value is required" });
+          }
+          if (field === "licenseNumber") {
+            const existing = await db
+              .select({ id: pharmacists.id })
+              .from(pharmacists)
+              .where(eq(pharmacists.licenseNumber, appliedValue))
+              .limit(1);
+            if (existing.length > 0) {
+              return res
+                .status(409)
+                .json({ message: "License number is already in use" });
+            }
+          }
+          const updatedAt = new Date();
+          let updated: any[] = [];
+          if (field === "licenseNumber") {
+            updated = await db
+              .update(pharmacists)
+              .set({ licenseNumber: appliedValue, updatedAt })
+              .where(eq(pharmacists.userId, reqRow.requesterUserId))
+              .returning();
+          } else {
+            return res
+              .status(400)
+              .json({ message: `Unsupported pharmacist field '${field}'` });
+          }
+          if (!updated[0]) {
+            return res
+              .status(404)
+              .json({ message: "Pharmacist profile not found" });
+          }
+        } else if (role === "lab_technician") {
+          if (!appliedValue) {
+            return res.status(400).json({ message: "Value is required" });
+          }
+          if (field === "licenseNumber") {
+            const existing = await db
+              .select({ id: labTechnicians.id })
+              .from(labTechnicians)
+              .where(eq(labTechnicians.licenseNumber, appliedValue))
+              .limit(1);
+            if (existing.length > 0) {
+              return res
+                .status(409)
+                .json({ message: "License number is already in use" });
+            }
+          }
+          const updatedAt = new Date();
+          let updated: any[] = [];
+          if (field === "licenseNumber") {
+            updated = await db
+              .update(labTechnicians)
+              .set({ licenseNumber: appliedValue, updatedAt })
+              .where(eq(labTechnicians.userId, reqRow.requesterUserId))
+              .returning();
+          } else {
+            return res
+              .status(400)
+              .json({ message: `Unsupported lab technician field '${field}'` });
+          }
+          if (!updated[0]) {
+            return res
+              .status(404)
+              .json({ message: "Lab technician profile not found" });
+          }
+        } else {
+          return res.status(400).json({ message: "Unsupported role" });
+        }
+
+        const adminNotesRaw =
+          typeof req.body?.adminNotes === "string" ? req.body.adminNotes : "";
+        const adminNotes = adminNotesRaw.trim();
+
+        let finalAdminNotes = adminNotes.length ? adminNotes : null;
+        if (
+          (generate || overrideValue !== undefined) &&
+          appliedValue &&
+          appliedValue !== requestedValue
+        ) {
+          const suffix = `Applied value: ${appliedValue}`;
+          finalAdminNotes = finalAdminNotes
+            ? `${finalAdminNotes}\n${suffix}`
+            : suffix;
+        }
+
+        const updatedReq = await db
+          .update(profileChangeRequests)
+          .set({
+            status: "approved",
+            reviewedBy: adminUserId,
+            reviewedAt: new Date(),
+            adminNotes: finalAdminNotes,
+            newValue: appliedValue,
+            updatedAt: new Date(),
+          } as any)
+          .where(eq(profileChangeRequests.id, id))
+          .returning();
+
+        const requester = await db
+          .select({
+            email: users.email,
+            username: users.username,
+            firstName: users.firstName,
+            lastName: users.lastName,
+          })
+          .from(users)
+          .where(eq(users.id, reqRow.requesterUserId))
+          .limit(1);
+
+        const requesterRow = requester[0];
+        const to = String(requesterRow?.email || "").trim();
+        const fullName = `${String(
+          requesterRow?.firstName || ""
+        ).trim()} ${String(requesterRow?.lastName || "").trim()}`.trim();
+
+        let emailSent = false;
+        let emailError: string | undefined;
+        if (to) {
+          const emailRes = await sendSensitiveChangeApprovedEmail({
+            to,
+            fullName: fullName.length ? fullName : null,
+            field,
+            oldValue: reqRow.oldValue ?? null,
+            newValue: appliedValue,
+          });
+          emailSent = emailRes.sent === true;
+          emailError = emailRes.sent === true ? undefined : emailRes.error;
+        }
+
+        return res.json({
+          request: updatedReq[0],
+          emailSent,
+          emailError,
+          appliedValue,
+        });
+      } catch (error: any) {
+        console.error("Approve profile change request error:", error);
+        return res
+          .status(500)
+          .json({ message: error?.message || "Failed to approve request" });
+      }
+    }
+  );
+
+  app.post(
+    "/api/admin/profile/change-requests/:id/reject",
+    isAuthenticated,
+    isAdmin,
+    async (req: any, res: Response) => {
+      try {
+        const adminUserId = (req as any)?.user?.id as string | undefined;
+        if (!adminUserId) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        const id = String(req.params?.id || "").trim();
+        if (!id) {
+          return res.status(400).json({ message: "id is required" });
+        }
+
+        const rows = await db
+          .select()
+          .from(profileChangeRequests)
+          .where(eq(profileChangeRequests.id, id))
+          .limit(1);
+        const reqRow: any = rows[0];
+        if (!reqRow) {
+          return res.status(404).json({ message: "Request not found" });
+        }
+        if (String(reqRow.status || "") !== "pending") {
+          return res
+            .status(409)
+            .json({ message: "Only pending requests can be rejected" });
+        }
+
+        const adminNotesRaw =
+          typeof req.body?.adminNotes === "string" ? req.body.adminNotes : "";
+        const adminNotes = adminNotesRaw.trim();
+        if (!adminNotes) {
+          return res.status(400).json({ message: "adminNotes is required" });
+        }
+
+        const updatedReq = await db
+          .update(profileChangeRequests)
+          .set({
+            status: "rejected",
+            reviewedBy: adminUserId,
+            reviewedAt: new Date(),
+            adminNotes,
+            updatedAt: new Date(),
+          } as any)
+          .where(eq(profileChangeRequests.id, id))
+          .returning();
+
+        const requester = await db
+          .select({
+            email: users.email,
+            firstName: users.firstName,
+            lastName: users.lastName,
+          })
+          .from(users)
+          .where(eq(users.id, reqRow.requesterUserId))
+          .limit(1);
+
+        const requesterRow = requester[0];
+        const to = String(requesterRow?.email || "").trim();
+        const fullName = `${String(
+          requesterRow?.firstName || ""
+        ).trim()} ${String(requesterRow?.lastName || "").trim()}`.trim();
+
+        let emailSent = false;
+        let emailError: string | undefined;
+        if (to) {
+          const emailRes = await sendSensitiveChangeRejectedEmail({
+            to,
+            fullName: fullName.length ? fullName : null,
+            field: String(reqRow.field || ""),
+            requestedValue: String(reqRow.newValue || ""),
+            reason: reqRow.reason ?? null,
+            adminNotes,
+          });
+          emailSent = emailRes.sent === true;
+          emailError = emailRes.sent === true ? undefined : emailRes.error;
+        }
+
+        return res.json({ request: updatedReq[0], emailSent, emailError });
+      } catch (error: any) {
+        console.error("Reject profile change request error:", error);
+        return res
+          .status(500)
+          .json({ message: error?.message || "Failed to reject request" });
+      }
+    }
+  );
+
+  app.post(
+    "/api/profile/avatar",
+    isAuthenticated,
+    async (req: any, res: Response) => {
+      try {
+        const userId = req.user?.id;
+        if (!userId) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        const multer = await import("multer");
+        const path = await import("path");
+        const fs = await import("fs");
+
+        const uploadsRoot = path.join(process.cwd(), "uploads", "avatars");
+        if (!fs.existsSync(uploadsRoot)) {
+          fs.mkdirSync(uploadsRoot, { recursive: true });
+        }
+
+        const storageEngine = multer.default.diskStorage({
+          destination: (_r: any, _file, cb) => {
+            const folder = path.join(uploadsRoot, userId);
+            if (!fs.existsSync(folder)) {
+              fs.mkdirSync(folder, { recursive: true });
+            }
+            cb(null, folder);
+          },
+          filename: (_req, file, cb) => {
+            const extByMime: Record<string, string> = {
+              "image/png": ".png",
+              "image/jpeg": ".jpg",
+              "image/webp": ".webp",
+            };
+            const ext = extByMime[file.mimetype] || ".png";
+            cb(null, `avatar-${Date.now()}${ext}`);
+          },
+        });
+
+        const upload = multer.default({
+          storage: storageEngine,
+          // Profile pictures can be a bit larger depending on format/metadata.
+          // We'll still crop/resize client-side, but allow some headroom.
+          limits: { fileSize: 5 * 1024 * 1024 },
+          fileFilter: (_req, file, cb) => {
+            const ok =
+              file.mimetype === "image/png" ||
+              file.mimetype === "image/jpeg" ||
+              file.mimetype === "image/webp";
+            if (!ok) {
+              return cb(
+                new Error("Invalid image type. Allowed: png, jpg, webp")
+              );
+            }
+            cb(null, true);
+          },
+        });
+
+        upload.single("file")(req, res, async (err) => {
+          if (err) {
+            console.error("Avatar upload error:", err);
+            const code = (err as any)?.code;
+            if (code === "LIMIT_FILE_SIZE") {
+              return res.status(413).json({
+                message: "File too large. Max allowed size is 5MB.",
+              });
+            }
+            return res
+              .status(400)
+              .json({ message: err.message || "Upload failed" });
+          }
+
+          const file = req.file as any;
+          if (!file?.path) {
+            return res.status(400).json({ message: "No file provided" });
+          }
+
+          // Store relative path so we can safely resolve it later.
+          const relativePath = path
+            .relative(process.cwd(), file.path)
+            .split(path.sep)
+            .join(path.posix.sep);
+
+          await db
+            .update(users)
+            .set({
+              profileImageUrl: relativePath,
+              updatedAt: new Date(),
+            })
+            .where(eq(users.id, userId));
+
+          return res.json({ ok: true });
+        });
+      } catch (error: any) {
+        console.error("Avatar upload init error:", error);
+        return res
+          .status(500)
+          .json({ message: error?.message || "Failed to upload avatar" });
+      }
+    }
+  );
+
+  app.get(
+    "/api/profile/avatar",
+    isAuthenticated,
+    async (req: any, res: Response) => {
+      try {
+        const userId = req.user?.id;
+        if (!userId) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        const path = await import("path");
+        const fs = await import("fs");
+
+        const rows = await db
+          .select({ profileImageUrl: users.profileImageUrl })
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+
+        const rel = rows[0]?.profileImageUrl;
+        if (!rel) {
+          return res.status(404).json({ message: "No avatar" });
+        }
+
+        const uploadsRoot = path.resolve(path.join(process.cwd(), "uploads"));
+        const absolutePath = path.resolve(path.join(process.cwd(), rel));
+        if (!absolutePath.startsWith(uploadsRoot + path.sep)) {
+          return res.status(400).json({ message: "Invalid avatar path" });
+        }
+        if (!fs.existsSync(absolutePath)) {
+          return res.status(404).json({ message: "Avatar not found" });
+        }
+
+        const ext = path.extname(absolutePath).toLowerCase();
+        const contentType =
+          ext === ".png"
+            ? "image/png"
+            : ext === ".webp"
+            ? "image/webp"
+            : "image/jpeg";
+
+        res.setHeader("Content-Type", contentType);
+        return fs.createReadStream(absolutePath).pipe(res);
+      } catch (error: any) {
+        console.error("Avatar serve error:", error);
+        return res
+          .status(500)
+          .json({ message: error?.message || "Failed to load avatar" });
+      }
+    }
+  );
 
   // ============================================================================
   // PATIENT SELF-REGISTRATION (REQUESTS)
@@ -6336,6 +7777,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Role is required" });
       }
 
+      // Validate role-specific requirements BEFORE creating the user.
+      if (role === "patient") {
+        if (!patientData || typeof patientData !== "object") {
+          return res.status(400).json({ message: "Patient data is required" });
+        }
+        const nic = String((patientData as any).nic || "").trim();
+        const gender = String((patientData as any).gender || "").trim();
+        const rfid = String((patientData as any).rfid || "").trim();
+        if (!nic) {
+          return res.status(400).json({ message: "Patient NIC is required" });
+        }
+        if (!gender) {
+          return res
+            .status(400)
+            .json({ message: "Patient gender is required" });
+        }
+        if (!rfid) {
+          return res.status(400).json({ message: "Patient RFID is required" });
+        }
+      }
+
+      if (role === "doctor") {
+        const doctorData = req.body?.doctorData;
+        if (!doctorData || typeof doctorData !== "object") {
+          return res.status(400).json({ message: "Doctor data is required" });
+        }
+        const nic = String((doctorData as any).nic || "").trim();
+        const gender = String((doctorData as any).gender || "").trim();
+        const specialization = String(
+          (doctorData as any).specialization || ""
+        ).trim();
+        const licenseNumber = String(
+          (doctorData as any).licenseNumber || ""
+        ).trim();
+        if (!nic) {
+          return res.status(400).json({ message: "Doctor NIC is required" });
+        }
+        if (!gender) {
+          return res.status(400).json({ message: "Doctor gender is required" });
+        }
+        if (!specialization) {
+          return res
+            .status(400)
+            .json({ message: "Doctor specialization is required" });
+        }
+        if (!licenseNumber) {
+          return res
+            .status(400)
+            .json({ message: "Doctor license number is required" });
+        }
+      }
+
+      if (role === "pharmacist") {
+        const pharmacistData = req.body?.pharmacistData;
+        const licenseNumber = String(
+          pharmacistData?.licenseNumber || ""
+        ).trim();
+        if (!licenseNumber) {
+          return res
+            .status(400)
+            .json({ message: "Pharmacist license number is required" });
+        }
+      }
+
+      if (role === "lab_technician") {
+        const labTechData = req.body?.labTechData;
+        const licenseNumber = String(labTechData?.licenseNumber || "").trim();
+        if (!licenseNumber) {
+          return res
+            .status(400)
+            .json({ message: "Lab technician license number is required" });
+        }
+      }
+
       const generateTempPassword = () => {
         const raw = randomBytes(12).toString("base64");
         const cleaned = raw.replace(/[^a-zA-Z0-9]/g, "");
@@ -6463,6 +7978,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (role === "doctor" && req.body.doctorData) {
         await storage.createDoctor({
           userId: user.id,
+          nic: req.body.doctorData.nic,
+          gender: req.body.doctorData.gender,
           specialization: req.body.doctorData.specialization,
           licenseNumber: req.body.doctorData.licenseNumber,
           qualifications: req.body.doctorData.qualifications,
@@ -6482,7 +7999,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (role === "lab_technician" && req.body.labTechData) {
         await storage.createLabTechnician({
           userId: user.id,
-          certificationNumber: req.body.labTechData.certificationNumber,
+          specialization: req.body.labTechData.specialization,
+          licenseNumber: req.body.labTechData.licenseNumber,
         });
       }
 

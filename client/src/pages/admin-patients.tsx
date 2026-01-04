@@ -47,6 +47,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { RemoteScannerPairing } from "@/components/remote-scanner-pairing";
+import { isWebSerialSupported, scanRfidOnce } from "@/lib/rfid-serial";
 
 interface Patient {
   id: string;
@@ -95,6 +96,7 @@ export default function AdminPatients() {
   const [approveRfid, setApproveRfid] = useState("");
   const [approveHealthId, setApproveHealthId] = useState("");
   const [rfidScanOpen, setRfidScanOpen] = useState(false);
+  const [isApproveRfidScanning, setIsApproveRfidScanning] = useState(false);
 
   // Fetch patients (admin view - limited info only)
   const { data: patients, isLoading } = useQuery<Patient[]>({
@@ -450,7 +452,7 @@ export default function AdminPatients() {
                 {selectedRequest?.address || "Not provided"}
               </div>
               <div>
-                <span className="text-muted-foreground">Blood Type:</span>{" "}
+                <span className="text-muted-foreground">Blood Group:</span>{" "}
                 {selectedRequest?.bloodType || "Not provided"}
               </div>
               <div>
@@ -471,7 +473,45 @@ export default function AdminPatients() {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setRfidScanOpen(true)}
+                  disabled={approveMutation.isPending || isApproveRfidScanning}
+                  onClick={() => {
+                    if (approveMutation.isPending || isApproveRfidScanning) {
+                      return;
+                    }
+
+                    // Prefer laptop-connected RC522 (NodeMCU over USB Serial)
+                    if (isWebSerialSupported()) {
+                      setIsApproveRfidScanning(true);
+                      toast({
+                        title: "RFID Scanner",
+                        description:
+                          "Select the NodeMCU serial port, then tap the RFID card.",
+                      });
+
+                      scanRfidOnce()
+                        .then((uid) => {
+                          setApproveRfid(uid);
+                          toast({
+                            title: "RFID Scanned",
+                            description: `UID captured: ${uid}`,
+                          });
+                        })
+                        .catch((err: unknown) => {
+                          const message =
+                            err instanceof Error ? err.message : "Scan failed";
+                          toast({
+                            title: "RFID Scan Failed",
+                            description: message,
+                            variant: "destructive",
+                          });
+                        })
+                        .finally(() => setIsApproveRfidScanning(false));
+                      return;
+                    }
+
+                    // Fallback to existing remote-scanner flow
+                    setRfidScanOpen(true);
+                  }}
                 >
                   Scan
                 </Button>

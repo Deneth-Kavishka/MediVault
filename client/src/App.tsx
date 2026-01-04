@@ -1,6 +1,6 @@
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
@@ -9,6 +9,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { LoadingScreen } from "@/components/loading-screen";
 import { useAuth } from "@/hooks/useAuth";
+import { ProfileMenu } from "@/components/profile-menu";
 import NotFound from "@/pages/not-found";
 import Landing from "@/pages/landing";
 import LoginPage from "@/pages/login";
@@ -38,14 +39,89 @@ import SettingsPage from "@/pages/settings";
 import ContactPage from "@/pages/contact";
 import MobileScanner from "@/pages/mobile-scanner";
 import QRScannerPage from "@/pages/qr-scanner-page";
+import ProfilePage from "@/pages/profile";
 import Privacy from "@/pages/privacy";
 import Terms from "@/pages/terms";
 import Accessibility from "@/pages/accessibility";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { useToast } from "@/hooks/use-toast";
+
+type MyChangeRequest = {
+  id: string;
+  field: string;
+  status: "pending" | "approved" | "rejected";
+};
 
 function Router() {
   const { isAuthenticated, isLoading, user } = useAuth();
   const [location, setLocation] = useLocation();
+  const { toast } = useToast();
+  const lastRequestStatusRef = useRef<Record<string, string>>({});
+
+  const myRequestsQuery = useQuery<{ requests: MyChangeRequest[] }>({
+    queryKey: ["/api/profile/change-requests"],
+    queryFn: async () => {
+      const res = await fetch("/api/profile/change-requests", {
+        credentials: "include",
+      });
+      if (!res.ok) {
+        throw new Error("Failed to load requests");
+      }
+      return res.json();
+    },
+    enabled: isAuthenticated && !isLoading,
+    refetchInterval: 10000,
+    refetchIntervalInBackground: true,
+  });
+
+  useEffect(() => {
+    const rows = myRequestsQuery.data?.requests;
+    if (!rows) return;
+
+    // First load: initialize snapshot
+    if (Object.keys(lastRequestStatusRef.current).length === 0) {
+      const snap: Record<string, string> = {};
+      for (const r of rows) snap[r.id] = r.status;
+      lastRequestStatusRef.current = snap;
+      return;
+    }
+
+    const prev = lastRequestStatusRef.current;
+    const next: Record<string, string> = { ...prev };
+
+    const changed: Array<{ field: string; status: string }> = [];
+    for (const r of rows) {
+      const old = prev[r.id];
+      next[r.id] = r.status;
+      if (
+        old &&
+        old !== r.status &&
+        (r.status === "approved" || r.status === "rejected")
+      ) {
+        changed.push({ field: r.field, status: r.status });
+      }
+    }
+
+    if (changed.length > 0) {
+      const first = changed[0];
+      const fieldLabel =
+        first.field === "bloodType"
+          ? "Blood Group"
+          : first.field === "dateOfBirth"
+          ? "Date of birth"
+          : first.field;
+
+      toast({
+        title: `Request ${first.status}`,
+        description:
+          changed.length === 1
+            ? `${fieldLabel} request was ${first.status}.`
+            : `${changed.length} requests were updated.`,
+      });
+    }
+
+    lastRequestStatusRef.current = next;
+  }, [myRequestsQuery.data?.requests, toast]);
 
   console.log("Router render:", { isLoading, isAuthenticated, location, user });
 
@@ -94,6 +170,7 @@ function Router() {
       "/medical-records",
       "/messages",
       "/notifications",
+      "/profile",
       "/lab-results",
       "/lab-tests",
       "/lab-technician-tests",
@@ -140,6 +217,7 @@ function Router() {
       {/* Protected routes */}
       <Route path="/change-password" component={ChangePasswordPage} />
       <Route path="/dashboard" component={Dashboard} />
+      <Route path="/profile" component={ProfilePage} />
       <Route path="/appointments" component={Appointments} />
       <Route path="/prescriptions" component={Prescriptions} />
       <Route path="/medical-records" component={MedicalRecords} />
@@ -194,7 +272,10 @@ function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
         <div className="flex flex-col flex-1 overflow-hidden">
           <header className="flex items-center justify-between h-16 px-4 border-b border-border bg-background shrink-0">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
-            <ThemeToggle />
+            <div className="flex items-center gap-2">
+              <ProfileMenu />
+              <ThemeToggle />
+            </div>
           </header>
           <main className="flex-1 overflow-auto">{children}</main>
         </div>

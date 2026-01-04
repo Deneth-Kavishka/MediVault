@@ -50,6 +50,38 @@ export const users = pgTable("users", {
 });
 
 // ============================================================================
+// PROFILE CHANGE REQUESTS (Sensitive-field changes require admin approval)
+// ============================================================================
+
+export const profileChangeRequests = pgTable(
+  "profile_change_requests",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    requesterUserId: varchar("requester_user_id")
+      .notNull()
+      .references(() => users.id),
+    role: varchar("role").notNull(),
+    field: varchar("field").notNull(),
+    oldValue: text("old_value"),
+    newValue: text("new_value").notNull(),
+    reason: text("reason"),
+    status: varchar("status").notNull().default("pending"), // 'pending' | 'approved' | 'rejected'
+    reviewedBy: varchar("reviewed_by").references(() => users.id),
+    reviewedAt: timestamp("reviewed_at"),
+    adminNotes: text("admin_notes"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_profile_change_requests_status").on(table.status),
+    index("idx_profile_change_requests_requester").on(table.requesterUserId),
+    index("idx_profile_change_requests_created_at").on(table.createdAt),
+  ]
+);
+
+// ============================================================================
 // PATIENT REGISTRATION REQUESTS (Patient-only self registration)
 // ============================================================================
 
@@ -115,6 +147,8 @@ export const doctors = pgTable("doctors", {
   userId: varchar("user_id")
     .notNull()
     .references(() => users.id),
+  nic: varchar("nic").unique(),
+  gender: varchar("gender"), // 'male' | 'female' | 'other'
   specialization: varchar("specialization").notNull(),
   licenseNumber: varchar("license_number").unique().notNull(),
   qualifications: text("qualifications"),
@@ -904,6 +938,10 @@ export const insertPatientRegistrationRequestSchema = createInsertSchema(
     // HTML date inputs and JSON payloads deliver strings; coerce to Date.
     dateOfBirth: z.coerce.date().optional().nullable(),
   });
+
+export const insertProfileChangeRequestSchema = createInsertSchema(
+  profileChangeRequests
+);
 export const insertPatientSchema = createInsertSchema(patients).omit({
   id: true,
   createdAt: true,

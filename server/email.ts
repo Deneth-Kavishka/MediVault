@@ -18,6 +18,23 @@ type UserCreatedEmail = {
   role: string;
 };
 
+type SensitiveChangeApprovedEmail = {
+  to: string;
+  fullName?: string | null;
+  field: string;
+  oldValue?: string | null;
+  newValue: string;
+};
+
+type SensitiveChangeRejectedEmail = {
+  to: string;
+  fullName?: string | null;
+  field: string;
+  requestedValue: string;
+  reason?: string | null;
+  adminNotes?: string | null;
+};
+
 function getSmtpConfig() {
   const host = process.env.SMTP_HOST?.trim();
   const portRaw = process.env.SMTP_PORT?.trim();
@@ -167,6 +184,139 @@ export async function sendUserCreatedEmail(payload: UserCreatedEmail) {
   } catch (err: any) {
     const message = err?.response || err?.message || String(err);
     console.error("User-created email send failed:", message);
+    return { sent: false, error: message };
+  }
+}
+
+export async function sendSensitiveChangeApprovedEmail(
+  payload: SensitiveChangeApprovedEmail
+) {
+  const smtp = getSmtpConfig();
+  if (!smtp) {
+    console.warn(
+      "SMTP not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM to enable emails."
+    );
+    return { sent: false, error: "SMTP not configured" };
+  }
+
+  const debugEmail =
+    process.env.DEBUG_EMAIL?.trim().toLowerCase() === "true" ||
+    process.env.DEBUG?.trim().toLowerCase() === "true";
+  if (debugEmail) {
+    console.log(
+      `[email] host=${smtp.host} port=${smtp.port} user=${smtp.user} from=${smtp.from} to=${payload.to}`
+    );
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.port === 465,
+    auth: {
+      user: smtp.user,
+      pass: smtp.pass,
+    },
+  });
+
+  const subject = "MediVault Profile Change Approved";
+
+  const hello = payload.fullName?.trim()
+    ? `Hello ${payload.fullName.trim()},`
+    : "Hello,";
+
+  const lines = [
+    hello,
+    "",
+    "Your request to change a sensitive profile field has been approved.",
+    "",
+    `Field: ${payload.field}`,
+    payload.oldValue ? `Previous: ${payload.oldValue}` : undefined,
+    `Updated: ${payload.newValue}`,
+    "",
+    "Thank you,",
+    "MediVault Admin",
+  ].filter(Boolean);
+
+  const text = lines.join("\n");
+
+  try {
+    await transporter.sendMail({
+      from: smtp.from,
+      to: payload.to,
+      subject,
+      text,
+    });
+    return { sent: true };
+  } catch (err: any) {
+    const message = err?.response || err?.message || String(err);
+    console.error("Sensitive-change approved email send failed:", message);
+    return { sent: false, error: message };
+  }
+}
+
+export async function sendSensitiveChangeRejectedEmail(
+  payload: SensitiveChangeRejectedEmail
+) {
+  const smtp = getSmtpConfig();
+  if (!smtp) {
+    console.warn(
+      "SMTP not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM to enable emails."
+    );
+    return { sent: false, error: "SMTP not configured" };
+  }
+
+  const debugEmail =
+    process.env.DEBUG_EMAIL?.trim().toLowerCase() === "true" ||
+    process.env.DEBUG?.trim().toLowerCase() === "true";
+  if (debugEmail) {
+    console.log(
+      `[email] host=${smtp.host} port=${smtp.port} user=${smtp.user} from=${smtp.from} to=${payload.to}`
+    );
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.port === 465,
+    auth: {
+      user: smtp.user,
+      pass: smtp.pass,
+    },
+  });
+
+  const subject = "MediVault Profile Change Rejected";
+
+  const hello = payload.fullName?.trim()
+    ? `Hello ${payload.fullName.trim()},`
+    : "Hello,";
+
+  const lines = [
+    hello,
+    "",
+    "Your request to change a sensitive profile field was rejected.",
+    "",
+    `Field: ${payload.field}`,
+    `Requested: ${payload.requestedValue}`,
+    payload.reason ? `Reason (you): ${payload.reason}` : undefined,
+    payload.adminNotes ? `Admin notes: ${payload.adminNotes}` : undefined,
+    "",
+    "Thank you,",
+    "MediVault Admin",
+  ].filter(Boolean);
+
+  const text = lines.join("\n");
+
+  try {
+    await transporter.sendMail({
+      from: smtp.from,
+      to: payload.to,
+      subject,
+      text,
+    });
+    return { sent: true };
+  } catch (err: any) {
+    const message = err?.response || err?.message || String(err);
+    console.error("Sensitive-change rejected email send failed:", message);
     return { sent: false, error: message };
   }
 }

@@ -452,7 +452,7 @@ export default function PatientRegisterPage() {
                           />
                         </div>
                         <div className="grid gap-2">
-                          <Label>Blood Type</Label>
+                          <Label>Blood Group</Label>
                           <Select
                             value={form.bloodType}
                             onValueChange={(v) =>
@@ -460,7 +460,7 @@ export default function PatientRegisterPage() {
                             }
                           >
                             <SelectTrigger className="h-12">
-                              <SelectValue placeholder="Select blood type" />
+                              <SelectValue placeholder="Select blood group" />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="A+">A+</SelectItem>
