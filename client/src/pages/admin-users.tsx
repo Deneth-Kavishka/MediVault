@@ -390,8 +390,9 @@ export default function AdminUsers() {
         "/api/admin/profile/change-requests/count?status=pending"
       );
     },
-    refetchInterval: 10000,
-    refetchIntervalInBackground: true,
+    // Hosted DB: keep this lightweight.
+    refetchInterval: 60000,
+    refetchIntervalInBackground: false,
   });
 
   const pendingCount = Number(pendingCountQuery.data?.count ?? 0) || 0;

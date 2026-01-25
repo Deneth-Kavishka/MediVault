@@ -5,8 +5,19 @@ import pg from "pg";
 
 const { Pool } = pg;
 
-const DEFAULT_DATABASE_URL =
-  "postgresql://medivault:Alpha@localhost:5432/medivault";
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL is not set (check your .env)");
+}
+
+function shouldUseSsl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return host !== "localhost" && host !== "127.0.0.1";
+  } catch {
+    return true;
+  }
+}
 
 function getArgValue(flag: string) {
   const idx = process.argv.indexOf(flag);
@@ -17,7 +28,6 @@ function getArgValue(flag: string) {
 async function main() {
   const fileArg = process.argv[2];
   const filePath = fileArg ? resolve(process.cwd(), fileArg) : undefined;
-  const databaseUrl = process.env.DATABASE_URL || DEFAULT_DATABASE_URL;
 
   if (!filePath) {
     console.error("Usage: npx tsx scripts/run-sql-file.ts <path-to-sql>");
@@ -38,9 +48,13 @@ async function main() {
 
   const pool = new Pool({
     connectionString: databaseUrl,
+    ...(shouldUseSsl(databaseUrl)
+      ? { ssl: { rejectUnauthorized: false } }
+      : {}),
     ...(statementTimeoutMs > 0
       ? { statement_timeout: statementTimeoutMs }
       : {}),
+    max: 10,
   } as any);
 
   try {

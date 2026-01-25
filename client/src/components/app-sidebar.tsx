@@ -50,7 +50,9 @@ export function AppSidebar() {
   // Fetch notifications with polling for real-time updates
   const { data: notifications = [] } = useQuery<any[]>({
     queryKey: ["/api/notifications"],
-    refetchInterval: 10000, // Refetch every 10 seconds for real-time updates
+    // Hosted DB adds latency; reduce polling.
+    refetchInterval: 60000,
+    refetchIntervalInBackground: false,
     enabled: !!user,
   });
 

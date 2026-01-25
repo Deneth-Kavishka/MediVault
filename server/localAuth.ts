@@ -5,7 +5,7 @@ import connectPg from "connect-pg-simple";
 import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
 import bcrypt from "bcryptjs";
-import { db } from "./db";
+import { db, pool } from "./db";
 import { auditLogs, users } from "@shared/schema";
 import { eq, or, sql } from "drizzle-orm";
 import geoip from "geoip-lite";
@@ -88,7 +88,8 @@ export function getSession() {
   const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
   const pgStore = connectPg(session);
   const sessionStore = new pgStore({
-    conString: process.env.DATABASE_URL,
+    // Reuse the already-configured pg Pool (includes Railway SSL when needed)
+    pool,
     createTableIfMissing: false,
     ttl: sessionTtl,
     tableName: "sessions",

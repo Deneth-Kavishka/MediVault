@@ -63,18 +63,13 @@ function Router() {
 
   const myRequestsQuery = useQuery<{ requests: MyChangeRequest[] }>({
     queryKey: ["/api/profile/change-requests"],
-    queryFn: async () => {
-      const res = await fetch("/api/profile/change-requests", {
-        credentials: "include",
-      });
-      if (!res.ok) {
-        throw new Error("Failed to load requests");
-      }
-      return res.json();
-    },
-    enabled: isAuthenticated && !isLoading,
-    refetchInterval: 10000,
-    refetchIntervalInBackground: true,
+    // Only check change-requests while on Profile page.
+    // This avoids an extra DB roundtrip during initial app load.
+    enabled: isAuthenticated && !isLoading && location === "/profile",
+    // Hosted DBs add network latency; avoid constant polling app-wide.
+    // Users will see updates when navigating or doing actions.
+    refetchInterval: false,
+    refetchIntervalInBackground: false,
   });
 
   useEffect(() => {

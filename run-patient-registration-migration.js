@@ -1,5 +1,5 @@
 // Run with: node run-patient-registration-migration.js
-// Uses DATABASE_URL if set, otherwise falls back to local dev URL.
+import "dotenv/config";
 
 import pg from "pg";
 import { readFileSync } from "fs";
@@ -7,9 +7,19 @@ import { join } from "path";
 
 const { Pool } = pg;
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ||
-  "postgresql://medivault:Alpha@localhost:5432/medivault";
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  throw new Error("DATABASE_URL is not set. Check your .env");
+}
+
+function shouldUseSsl(url) {
+  try {
+    const host = new URL(url).hostname;
+    return host !== "localhost" && host !== "127.0.0.1";
+  } catch {
+    return true;
+  }
+}
 
 const sqlFiles = [
   "migration_add_patient_registration_requests.sql",
@@ -23,7 +33,13 @@ async function run() {
     DATABASE_URL?.replace(/:[^:]*@/, ":****@")
   );
 
-  const pool = new Pool({ connectionString: DATABASE_URL });
+  const pool = new Pool({
+    connectionString: DATABASE_URL,
+    ...(shouldUseSsl(DATABASE_URL)
+      ? { ssl: { rejectUnauthorized: false } }
+      : {}),
+    max: 10,
+  });
 
   try {
     for (const filePath of sqlFiles) {

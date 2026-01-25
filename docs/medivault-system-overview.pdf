@@ -1,0 +1,953 @@
+%PDF-1.3
+%ºß¬à
+3 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 4 0 R
+>>
+endobj
+4 0 obj
+<<
+/Length 5866
+>>
+stream
+0.200025 w
+0 G
+BT
+/F2 20 Tf
+23. TL
+0 g
+48. 777.8899999999999864 Td
+(MediVault – System Overview \(Tech + Flow\)) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+48. 757.8899999999999864 Td
+(Generated: 2026-01-05) Tj
+ET
+0.86 G
+48. 745.8899999999999864 m
+547.2799999999999727 745.8899999999999864 l
+S
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.96 g
+0.78 G
+0. w
+0.96 g
+48. 731.8899999999999864 499.2799999999999727 -23.5 re
+f
+BT
+/F2 10 Tf
+11.5 TL
+0.078 g
+54. 717.3899999999999864 Td
+(What this system is) Tj
+ET
+0.86 G
+0.200025 w
+1. g
+0.78 G
+0.1 w
+1. g
+48. 708.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 693.8899999999999864 Td
+(MediVault is a full-stack healthcare management system \(EHR-style\).) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 684.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 670.3899999999999864 Td
+(One server serves both: frontend \(React SPA\) and backend API \(/api/*\).) Tj
+ET
+0.86 G
+0.200025 w
+0.78 G
+0. w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.96 g
+0.78 G
+0. w
+0.96 g
+48. 647.3899999999999864 499.2799999999999727 -23.5 re
+f
+BT
+/F2 10 Tf
+11.5 TL
+0.078 g
+54. 632.8899999999999864 Td
+(Technology stack \(high level\)) Tj
+ET
+0.86 G
+0.200025 w
+1. g
+0.78 G
+0.1 w
+1. g
+48. 623.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 609.3899999999999864 Td
+(Frontend: React + TypeScript + Vite + Tailwind + TanStack Query.) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 600.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 585.8899999999999864 Td
+(Backend: Node.js + Express + TypeScript.) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 576.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 562.3899999999999864 Td
+(Auth: Passport Local + server-side sessions stored in PostgreSQL.) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 553.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 538.8899999999999864 Td
+(Database: PostgreSQL + Drizzle ORM.) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 529.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 515.3899999999999864 Td
+(Realtime: WebSockets \(scanner/real-time features\).) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 506.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 491.8899999999999864 Td
+(Email: Nodemailer utilities.) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 482.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 468.3899999999999864 Td
+(AI \(optional\): Gemini integration.) Tj
+ET
+0.86 G
+0.200025 w
+0.78 G
+0. w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.96 g
+0.78 G
+0. w
+0.96 g
+48. 445.3899999999999864 499.2799999999999727 -23.5 re
+f
+BT
+/F2 10 Tf
+11.5 TL
+0.078 g
+54. 430.8899999999999864 Td
+(Where the backend is \(files/folders\)) Tj
+ET
+0.86 G
+0.200025 w
+1. g
+0.78 G
+0.1 w
+1. g
+48. 421.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 407.3899999999999864 Td
+(Backend folder: server/) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 398.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 383.8899999999999864 Td
+(Backend entry/startup: server/index.ts \(creates app, sessions, registerRoutes, starts server\)) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 374.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 360.3899999999999864 Td
+(API routes: server/routes.ts \(most /api/* endpoints\)) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 351.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 336.8899999999999864 Td
+(Auth routes + auth middleware: server/localAuth.ts \(POST /api/login, isAuthenticated, role guards\)) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 327.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 313.3899999999999864 Td
+(DB connection: server/db.ts \(pg Pool + drizzle db\)) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 304.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 289.8899999999999864 Td
+(DB operations layer \(DB controllers\): server/storage.ts \(DatabaseStorage class\)) Tj
+ET
+0.86 G
+0.200025 w
+0.78 G
+0. w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.96 g
+0.78 G
+0. w
+0.96 g
+48. 266.8899999999999864 499.2799999999999727 -23.5 re
+f
+BT
+/F2 10 Tf
+11.5 TL
+0.078 g
+54. 252.3899999999999864 Td
+(Where DB schema is) Tj
+ET
+0.86 G
+0.200025 w
+1. g
+0.78 G
+0.1 w
+1. g
+48. 243.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 228.8899999999999864 Td
+(Shared schema: shared/schema.ts \(tables + types + Zod insert schemas\)) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 219.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 205.3899999999999864 Td
+(Migrations: drizzle.config.ts + migration_*.sql files) Tj
+ET
+0.86 G
+0.200025 w
+0.78 G
+0. w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.96 g
+0.78 G
+0. w
+0.96 g
+48. 182.3899999999999864 499.2799999999999727 -23.5 re
+f
+BT
+/F2 10 Tf
+11.5 TL
+0.078 g
+54. 167.8899999999999864 Td
+(How frontend calls the backend) Tj
+ET
+0.86 G
+0.200025 w
+1. g
+0.78 G
+0.1 w
+1. g
+48. 158.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 144.3899999999999864 Td
+(Fetch helper: client/src/lib/queryClient.ts) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 135.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 120.8899999999999864 Td
+(Requests use fetch\('/api/...', { credentials: 'include' }\) so sessions work.) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 111.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 97.3899999999999864 Td
+(Pages mostly use TanStack Query queryKey: ['/api/...'].) Tj
+ET
+0.86 G
+0.200025 w
+0.78 G
+0. w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+endstream
+endobj
+5 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 6 0 R
+>>
+endobj
+6 0 obj
+<<
+/Length 4253
+>>
+stream
+0.200025 w
+0.86 G
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.96 g
+0.78 G
+0. w
+0.96 g
+48. 777.8899999999999864 499.2799999999999727 -23.5 re
+f
+BT
+/F2 10 Tf
+11.5 TL
+0.078 g
+54. 763.3899999999999864 Td
+(Main API groups \(examples\)) Tj
+ET
+0.86 G
+0.200025 w
+1. g
+0.78 G
+0.1 w
+1. g
+48. 754.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 739.8899999999999864 Td
+(Auth: POST /api/login \(and related auth endpoints in server/localAuth.ts\)) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 730.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 716.3899999999999864 Td
+(Profile: GET /api/profile, GET /api/profile/full) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 707.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 692.8899999999999864 Td
+(Patients: /api/patients, /api/patients/me, /api/patients/:id, /api/patients/nic/:nic) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 683.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 669.3899999999999864 Td
+(Doctors + availability: /api/doctors, /api/doctor-availability) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 660.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 645.8899999999999864 Td
+(Appointments: /api/appointments) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 636.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 622.3899999999999864 Td
+(Medical records/documents: /api/medical-records, /api/medical-documents) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 613.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 598.8899999999999864 Td
+(Prescriptions: /api/prescriptions, /api/prescriptions/doctor/mine) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 589.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 575.3899999999999864 Td
+(Lab: /api/lab-tests, /api/lab-facilities) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 566.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 551.8899999999999864 Td
+(Billing: /api/bills, /api/payments) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 542.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 528.3899999999999864 Td
+(Notifications: /api/notifications) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 519.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 504.8899999999999864 Td
+(Messaging: /api/conversations, /api/messages) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 495.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 481.3899999999999864 Td
+(Admin: /api/admin/* \(users, stats, settings, backup/restore, reports\)) Tj
+ET
+0.86 G
+0.200025 w
+0.78 G
+0. w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+0.96 g
+0.78 G
+0. w
+0.96 g
+48. 458.3899999999999864 499.2799999999999727 -23.5 re
+f
+BT
+/F2 10 Tf
+11.5 TL
+0.078 g
+54. 443.8899999999999864 Td
+(System flow \(simple\)) Tj
+ET
+0.86 G
+0.200025 w
+1. g
+0.78 G
+0.1 w
+1. g
+48. 434.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 420.3899999999999864 Td
+(1\) User opens the UI \(React\) in the browser.) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 411.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 396.8899999999999864 Td
+(2\) UI calls backend endpoints under /api/*.) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 387.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 373.3899999999999864 Td
+(3\) Backend verifies session \(cookie\) + role guards.) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 364.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 349.8899999999999864 Td
+(4\) Backend reads/writes PostgreSQL via Drizzle using shared/schema.ts.) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 340.8899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 326.3899999999999864 Td
+(5\) Backend returns JSON; frontend updates UI and caches via TanStack Query.) Tj
+ET
+1. g
+0.78 G
+0.1 w
+1. g
+48. 317.3899999999999864 499.2799999999999727 -23.5 re
+B
+BT
+/F1 10 Tf
+11.5 TL
+0.078 g
+54. 302.8899999999999864 Td
+(6\) Optional realtime: WebSocket server for scanner/real-time updates.) Tj
+ET
+0.86 G
+0.200025 w
+0.78 G
+0. w
+0.86 G
+0.200025 w
+0.86 G
+0.200025 w
+endstream
+endobj
+1 0 obj
+<</Type /Pages
+/Kids [3 0 R 5 0 R ]
+/Count 2
+>>
+endobj
+7 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+8 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+9 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-Oblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+10 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-BoldOblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+11 0 obj
+<<
+/Type /Font
+/BaseFont /Courier
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+12 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+13 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-Oblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+14 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-BoldOblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+15 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Roman
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+16 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+17 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Italic
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+18 0 obj
+<<
+/Type /Font
+/BaseFont /Times-BoldItalic
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+19 0 obj
+<<
+/Type /Font
+/BaseFont /ZapfDingbats
+/Subtype /Type1
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+20 0 obj
+<<
+/Type /Font
+/BaseFont /Symbol
+/Subtype /Type1
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+2 0 obj
+<<
+/ProcSet [/PDF /Text /ImageB /ImageC /ImageI]
+/Font <<
+/F1 7 0 R
+/F2 8 0 R
+/F3 9 0 R
+/F4 10 0 R
+/F5 11 0 R
+/F6 12 0 R
+/F7 13 0 R
+/F8 14 0 R
+/F9 15 0 R
+/F10 16 0 R
+/F11 17 0 R
+/F12 18 0 R
+/F13 19 0 R
+/F14 20 0 R
+>>
+/XObject <<
+>>
+>>
+endobj
+21 0 obj
+<<
+/Producer (jsPDF 3.0.4)
+/CreationDate (D:20260105070222+05'30')
+>>
+endobj
+22 0 obj
+<<
+/Type /Catalog
+/Pages 1 0 R
+/OpenAction [3 0 R /FitH null]
+/PageLayout /OneColumn
+>>
+endobj
+xref
+0 23
+0000000000 65535 f 
+0000010512 00000 n 
+0000012337 00000 n 
+0000000015 00000 n 
+0000000152 00000 n 
+0000006070 00000 n 
+0000006207 00000 n 
+0000010575 00000 n 
+0000010700 00000 n 
+0000010830 00000 n 
+0000010963 00000 n 
+0000011101 00000 n 
+0000011225 00000 n 
+0000011354 00000 n 
+0000011486 00000 n 
+0000011622 00000 n 
+0000011750 00000 n 
+0000011877 00000 n 
+0000012006 00000 n 
+0000012139 00000 n 
+0000012241 00000 n 
+0000012587 00000 n 
+0000012673 00000 n 
+trailer
+<<
+/Size 23
+/Root 22 0 R
+/Info 21 0 R
+/ID [ <8C1331A0249D41E4389805C3CCA0FABA> <8C1331A0249D41E4389805C3CCA0FABA> ]
+>>
+startxref
+12777
+%%EOF

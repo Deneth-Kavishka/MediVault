@@ -3,12 +3,27 @@ import pg from "pg";
 
 const { Pool } = pg;
 
-const DEFAULT_DATABASE_URL =
-  "postgresql://medivault:Alpha@localhost:5432/medivault";
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL is not set (check your .env)");
+}
+
+function shouldUseSsl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return host !== "localhost" && host !== "127.0.0.1";
+  } catch {
+    return true;
+  }
+}
 
 async function main() {
   const pool = new Pool({
-    connectionString: process.env.DATABASE_URL || DEFAULT_DATABASE_URL,
+    connectionString: databaseUrl,
+    ...(shouldUseSsl(databaseUrl)
+      ? { ssl: { rejectUnauthorized: false } }
+      : {}),
+    max: 10,
   });
 
   try {

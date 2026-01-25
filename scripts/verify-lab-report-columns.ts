@@ -1,8 +1,25 @@
+import "dotenv/config";
 import { Pool } from "pg";
 
 async function main() {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error("DATABASE_URL is not set (check your .env)");
+  }
+
+  const shouldUseSsl = (() => {
+    try {
+      const host = new URL(databaseUrl).hostname;
+      return host !== "localhost" && host !== "127.0.0.1";
+    } catch {
+      return true;
+    }
+  })();
+
   const pool = new Pool({
-    connectionString: "postgresql://medivault:Alpha@localhost:5432/medivault",
+    connectionString: databaseUrl,
+    ...(shouldUseSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+    max: 10,
   });
 
   try {

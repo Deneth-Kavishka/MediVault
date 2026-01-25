@@ -81,8 +81,9 @@ export default function ProfilePage() {
 
   const myRequestsQuery = useQuery<{ requests: MyChangeRequest[] }>({
     queryKey: ["/api/profile/change-requests"],
-    refetchInterval: 10000,
-    refetchIntervalInBackground: true,
+    // Avoid constant polling against hosted DB.
+    refetchInterval: false,
+    refetchIntervalInBackground: false,
   });
 
   const [isEditing, setIsEditing] = useState(false);

@@ -8,7 +8,21 @@ async function main() {
     throw new Error("DATABASE_URL is not set (check your .env)");
   }
 
-  const pool = new Pool({ connectionString: databaseUrl });
+  // Railway-hosted Postgres typically requires SSL.
+  const shouldUseSsl = (() => {
+    try {
+      const host = new URL(databaseUrl).hostname;
+      return host !== "localhost" && host !== "127.0.0.1";
+    } catch {
+      return true;
+    }
+  })();
+
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    ...(shouldUseSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+    max: 10,
+  });
 
   try {
     const sql = readFileSync(

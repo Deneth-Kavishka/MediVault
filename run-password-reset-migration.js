@@ -1,4 +1,5 @@
 // Migration script for password_reset_requests table
+import "dotenv/config";
 import pg from "pg";
 import * as fs from "fs";
 import * as path from "path";
@@ -10,10 +11,25 @@ const __dirname = dirname(__filename);
 
 const { Pool } = pg;
 
-// Use the DATABASE_URL from your .env file
-const DATABASE_URL = "postgresql://medivault:Alpha@localhost:5432/medivault";
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  throw new Error("DATABASE_URL is not set. Check your .env");
+}
 
-const pool = new Pool({ connectionString: DATABASE_URL });
+function shouldUseSsl(url) {
+  try {
+    const host = new URL(url).hostname;
+    return host !== "localhost" && host !== "127.0.0.1";
+  } catch {
+    return true;
+  }
+}
+
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ...(shouldUseSsl(DATABASE_URL) ? { ssl: { rejectUnauthorized: false } } : {}),
+  max: 10,
+});
 
 async function migrate() {
   console.log("🔄 Running password reset requests migration...");

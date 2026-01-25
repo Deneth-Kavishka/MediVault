@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
+import compression from "compression";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { getSession } from "./localAuth";
@@ -9,6 +10,26 @@ import { prescriptions } from "@shared/schema";
 import { and, isNotNull, isNull, lt, ne } from "drizzle-orm";
 
 const app = express();
+
+// API endpoints should always return JSON (200/4xx/5xx), not 304.
+// 304 responses can break fetch-based clients (res.ok=false) and cause refetch loops.
+app.set("etag", false);
+
+// Compress JSON/HTML to speed up responses over slower links.
+app.use(
+  compression({
+    threshold: 1024, // only compress responses > 1KB
+  })
+);
+
+// Disable caching for API responses.
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api")) {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Pragma", "no-cache");
+  }
+  next();
+});
 
 declare module "http" {
   interface IncomingMessage {
@@ -33,27 +54,25 @@ app.set("sessionMiddleware", sessionMiddleware);
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
 
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
+  // Avoid expensive JSON.stringify on large responses.
+  // Enable response size logging by setting DEBUG_API_LOG_SIZE=true
+  const debugLogSize =
+    String(process.env.DEBUG_API_LOG_SIZE || "").toLowerCase() === "true";
+  const startBytes = debugLogSize
+    ? Number(res.getHeader("Content-Length") || 0)
+    : 0;
 
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
-      if (logLine.length > 80) {
-        logLine = logLine.slice(0, 79) + "…";
-      }
-
-      log(logLine);
+      const bytes = debugLogSize
+        ? Number(res.getHeader("Content-Length") || startBytes || 0)
+        : 0;
+      log(
+        `${req.method} ${path} ${res.statusCode} in ${duration}ms` +
+          (debugLogSize && bytes > 0 ? ` (${bytes} bytes)` : "")
+      );
     }
   });
 

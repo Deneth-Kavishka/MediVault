@@ -1,12 +1,28 @@
+import "dotenv/config";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { sql } from "drizzle-orm";
 import { readFileSync } from "fs";
 import { join } from "path";
 
-// Database connection
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL is not set (check your .env)");
+}
+
+function shouldUseSsl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return host !== "localhost" && host !== "127.0.0.1";
+  } catch {
+    return true;
+  }
+}
+
 const pool = new Pool({
-  connectionString: "postgresql://medivault:Alpha@localhost:5432/medivault",
+  connectionString: databaseUrl,
+  ...(shouldUseSsl(databaseUrl) ? { ssl: { rejectUnauthorized: false } } : {}),
+  max: 10,
 });
 
 const db = drizzle(pool);
